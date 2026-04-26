@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"flag"
+	"os"
 	"runtime/debug"
 
 	"github.com/mariocandela/beelzebub/v3/builder"
@@ -17,11 +18,13 @@ func main() {
 		configurationsCorePath          string
 		configurationsServicesDirectory string
 		memLimitMiB                     int
+		validate                        bool
 	)
 
 	flag.StringVar(&configurationsCorePath, "confCore", "./configurations/beelzebub.yaml", "Provide the path of configurations core")
 	flag.StringVar(&configurationsServicesDirectory, "confServices", "./configurations/services/", "Directory config services")
 	flag.IntVar(&memLimitMiB, "memLimitMiB", 100, "Process Memory in MiB (default 100, set to -1 to use system default)")
+	flag.BoolVar(&validate, "validate", false, "Validate configurations without starting the daemon")
 	flag.Parse()
 
 	if memLimitMiB > 0 {
@@ -30,12 +33,34 @@ func main() {
 		debug.SetMemoryLimit(int64(memLimitMiB * 1024 * 1024))
 	}
 
-	parser := parser.Init(configurationsCorePath, configurationsServicesDirectory)
+	configurationsParser := parser.Init(configurationsCorePath, configurationsServicesDirectory)
 
-	coreConfigurations, err := parser.ReadConfigurationsCore()
+	if validate {
+		services, parseIssues, err := configurationsParser.ReadConfigurationsServicesForValidation()
+		if err != nil {
+			log.Fatalf("Error during validation: %s", err)
+		}
+		serviceResult := parser.Validate(services, parseIssues)
+
+		coreConfigurations, err := configurationsParser.ReadConfigurationsCore()
+		if err != nil {
+			coreConfigurations = &parser.BeelzebubCoreConfigurations{}
+		}
+		coreResult := parser.ValidateCore(coreConfigurations)
+
+		combined := parser.ValidateResult{
+			Results:       append(serviceResult.Results, coreResult.Results...),
+			TotalErrors:   serviceResult.TotalErrors + coreResult.TotalErrors,
+			TotalWarnings: serviceResult.TotalWarnings + coreResult.TotalWarnings,
+		}
+		combined.Print()
+		os.Exit(combined.ExitCode())
+	}
+
+	coreConfigurations, err := configurationsParser.ReadConfigurationsCore()
 	failOnError(err, "Error during ReadConfigurationsCore: ")
 
-	beelzebubServicesConfiguration, err := parser.ReadConfigurationsServices()
+	beelzebubServicesConfiguration, err := configurationsParser.ReadConfigurationsServices()
 	failOnError(err, "Error during ReadConfigurationsServices: ")
 
 	if len(beelzebubServicesConfiguration) == 0 && !coreConfigurations.Core.BeelzebubCloud.Enabled {
