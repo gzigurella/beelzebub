@@ -999,7 +999,7 @@ func TestReadConfigurationsServicesForValidationFromEnv(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Len(t, services, 1)
 	assert.Empty(t, issues)
-	assert.Equal(t, "<env:BEELZEBUB_SERVICES_CONFIG>", services[0].Filename)
+	assert.Equal(t, "<env:BEELZEBUB_SERVICES_CONFIG>[0]", services[0].Filename)
 	assert.Equal(t, "ssh", services[0].Protocol)
 }
 
@@ -1095,7 +1095,7 @@ func TestReadConfigurationsServicesForValidationFromEnvRateLimitError(t *testing
 	assert.Len(t, issues, 1)
 	assert.Equal(t, LevelError, issues[0].Level)
 	assert.Contains(t, issues[0].Message, "invalid rate limiting config")
-	assert.Equal(t, "<env:BEELZEBUB_SERVICES_CONFIG>", issues[0].Filename)
+	assert.Equal(t, "<env:BEELZEBUB_SERVICES_CONFIG>[0]", issues[0].Filename)
 }
 
 func TestReadConfigurationsServicesForValidationFromEnvInvalidRegex(t *testing.T) {
@@ -1109,7 +1109,7 @@ func TestReadConfigurationsServicesForValidationFromEnvInvalidRegex(t *testing.T
 	assert.Len(t, issues, 1)
 	assert.Equal(t, LevelError, issues[0].Level)
 	assert.Contains(t, issues[0].Message, "invalid regex")
-	assert.Equal(t, "<env:BEELZEBUB_SERVICES_CONFIG>", issues[0].Filename)
+	assert.Equal(t, "<env:BEELZEBUB_SERVICES_CONFIG>[0]", issues[0].Filename)
 }
 
 func TestReadConfigurationsServicesStrictFileReadError(t *testing.T) {
@@ -1164,5 +1164,5 @@ func TestReadConfigurationsServicesForValidationFromEnvInvalidTrustedProxies(t *
 	assert.Len(t, issues, 1)
 	assert.Equal(t, LevelError, issues[0].Level)
 	assert.Contains(t, issues[0].Message, "invalid trustedProxies entry")
-	assert.Equal(t, "<env:BEELZEBUB_SERVICES_CONFIG>", issues[0].Filename)
+	assert.Equal(t, "<env:BEELZEBUB_SERVICES_CONFIG>[0]", issues[0].Filename)
 }

@@ -342,7 +342,7 @@ func parseServicesFromEnv(jsonStr string, strict bool) ([]BeelzebubServiceConfig
 
 	for i := range servicesConfiguration {
 		svc := &servicesConfiguration[i]
-		svc.Filename = "<env:BEELZEBUB_SERVICES_CONFIG>"
+		svc.Filename = fmt.Sprintf("<env:BEELZEBUB_SERVICES_CONFIG>[%d]", i)
 
 		if svc.Plugin.RateLimitEnabled {
 			if svc.Plugin.RateLimitRequests <= 0 || svc.Plugin.RateLimitWindowSeconds <= 0 {
