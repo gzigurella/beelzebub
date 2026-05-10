@@ -633,7 +633,7 @@ func TestValidateCommandEmptyHandlerAndPlugin(t *testing.T) {
 			issues := findIssues(result, "test.yaml")
 
 			if tt.wantWarn {
-				assert.True(t, hasIssue(issues, LevelWarning, "command[0] has empty handler and no plugin — matched requests will produce no output"))
+				assert.True(t, hasIssue(issues, LevelWarning, "command[0] has empty handler and no plugin, matched requests will produce no output"))
 			} else {
 				assert.False(t, hasIssue(issues, LevelWarning, "command[0] has empty handler and no plugin"))
 			}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	_ "github.com/beelzebub-labs/beelzebub/v3/internal/plugins"
@@ -30,8 +29,6 @@ func validateConfigurations(_ *cobra.Command, _ []string) error {
 }
 
 func runValidate(corePath, servicesPath string) error {
-	log.SetLevel(log.ErrorLevel)
-
 	fmt.Printf("Validating services from %s\n", servicesPath)
 	fmt.Printf("Validating core from %s\n\n", corePath)
 

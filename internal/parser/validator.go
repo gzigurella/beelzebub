@@ -15,6 +15,8 @@ import (
 const (
 	LevelError   = "error"
 	LevelWarning = "warning"
+	minPort      = 1
+	maxPort      = 65535
 )
 
 // ValidationIssue is a single validation finding, either an error or a warning
@@ -121,6 +123,7 @@ func validateProtocol(svc BeelzebubServiceConfiguration) []ValidationIssue {
 	if slices.Contains(validProtocols, svc.Protocol) {
 		return nil
 	}
+
 	return []ValidationIssue{{
 		Level:   LevelError,
 		Message: fmt.Sprintf("invalid protocol %q, valid: %s", svc.Protocol, strings.Join(validProtocols, ", ")),
@@ -132,22 +135,24 @@ func validateAddress(svc BeelzebubServiceConfiguration) []ValidationIssue {
 	if address == "" {
 		return []ValidationIssue{{Level: LevelError, Message: "address is empty"}}
 	}
+
 	if strings.Contains(address, "/") {
 		return nil
 	}
+
 	lastColon := strings.LastIndex(address, ":")
 	if lastColon == -1 {
 		return []ValidationIssue{{
 			Level:   LevelWarning,
-			Message: fmt.Sprintf("address %q has invalid port format or port out of range (1-65535)", address),
+			Message: fmt.Sprintf("address %q has invalid port format or port out of range (%d-%d)", address, minPort, maxPort),
 		}}
 	}
 	portStr := address[lastColon+1:]
 	port, err := strconv.Atoi(portStr)
-	if err != nil || port < 1 || port > 65535 {
+	if err != nil || port < minPort || port > maxPort {
 		return []ValidationIssue{{
 			Level:   LevelWarning,
-			Message: fmt.Sprintf("address %q has invalid port format or port out of range (1-65535)", address),
+			Message: fmt.Sprintf("address %q has invalid port format or port out of range (%d-%d)", address, minPort, maxPort),
 		}}
 	}
 	return nil
@@ -162,18 +167,21 @@ func validateCommands(svc BeelzebubServiceConfiguration) []ValidationIssue {
 				Message: fmt.Sprintf("command[%d] has empty regex", j),
 			})
 		}
+
 		if !slices.Contains(validCommandPlugins, cmd.Plugin) {
 			issues = append(issues, ValidationIssue{
 				Level:   LevelError,
 				Message: fmt.Sprintf("command[%d] has invalid plugin %q, valid: %s", j, cmd.Plugin, strings.Join(validCommandPluginsDisplay, ", ")),
 			})
 		}
+
 		if cmd.Handler == "" && cmd.Plugin == "" {
 			issues = append(issues, ValidationIssue{
 				Level:   LevelWarning,
-				Message: fmt.Sprintf("command[%d] has empty handler and no plugin — matched requests will produce no output", j),
+				Message: fmt.Sprintf("command[%d] has empty handler and no plugin, matched requests will produce no output", j),
 			})
 		}
+
 		for _, header := range cmd.Headers {
 			if !strings.Contains(header, ":") {
 				issues = append(issues, ValidationIssue{
@@ -192,6 +200,7 @@ func validateFallbackCommand(svc BeelzebubServiceConfiguration) []ValidationIssu
 	if fb.Handler == "" && fb.Plugin == "" {
 		return nil
 	}
+
 	if fb.RegexStr != "" {
 		if _, err := regexp.Compile(fb.RegexStr); err != nil {
 			issues = append(issues, ValidationIssue{
@@ -200,6 +209,7 @@ func validateFallbackCommand(svc BeelzebubServiceConfiguration) []ValidationIssu
 			})
 		}
 	}
+
 	if !slices.Contains(validCommandPlugins, fb.Plugin) {
 		issues = append(issues, ValidationIssue{
 			Level:   LevelError,
@@ -217,6 +227,7 @@ func validatePluginConfig(svc BeelzebubServiceConfiguration) []ValidationIssue {
 			Message: "deadlineTimeoutSeconds is not set, connections may be closed immediately",
 		})
 	}
+
 	if svc.Plugin.OpenAISecretKey != "" {
 		issues = append(issues, ValidationIssue{
 			Level:   LevelWarning,
@@ -229,7 +240,7 @@ func validatePluginConfig(svc BeelzebubServiceConfiguration) []ValidationIssue {
 func detectCollisions(services []BeelzebubServiceConfiguration, resultMap map[string]*ValidationResult) {
 	collisionMap := make(map[string][]int)
 	for i, svc := range services {
-		key := svc.Protocol + " " + svc.Address
+		key := svc.Protocol + " " + strings.TrimSpace(svc.Address)
 		collisionMap[key] = append(collisionMap[key], i)
 	}
 
@@ -252,6 +263,7 @@ func buildResult(resultMap map[string]*ValidationResult) ValidateResult {
 	var totalErrors, totalWarnings int
 	for _, r := range resultMap {
 		results = append(results, *r)
+
 		for _, issue := range r.Issues {
 			switch issue.Level {
 			case LevelError:
