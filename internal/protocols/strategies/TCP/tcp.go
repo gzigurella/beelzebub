@@ -75,6 +75,7 @@ func (tcpStrategy *TCPStrategy) StopAll() error {
 	if tcpStrategy.Sessions != nil {
 		tcpStrategy.Sessions.Close()
 	}
+	tcpStrategy.cleanerOnce = sync.Once{}
 
 	var errs []error
 	for _, listener := range tcpStrategy.listeners {

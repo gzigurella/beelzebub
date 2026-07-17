@@ -228,6 +228,7 @@ func (sshStrategy *SSHStrategy) StopAll() error {
 	if sshStrategy.Sessions != nil {
 		sshStrategy.Sessions.Close()
 	}
+	sshStrategy.cleanerOnce = sync.Once{}
 
 	var errs []error
 	for _, server := range sshStrategy.servers {

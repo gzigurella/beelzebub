@@ -103,6 +103,13 @@ func (b *Builder) Close() error {
 		return nil
 	}
 
+	// Stop the reload consumer goroutine. Reload() will re-create
+	// reloadCh + consumer in Run() if cloud is still enabled.
+	if b.reloadCh != nil {
+		close(b.reloadCh)
+		b.reloadCh = nil
+	}
+
 	if b.servicesCancel != nil {
 		b.servicesCancel()
 	}
@@ -133,7 +140,7 @@ func (b *Builder) Close() error {
 
 	if b.logsFile != nil {
 		if err := b.logsFile.Close(); err != nil {
-			return err
+			log.Errorf("error closing log file: %s", err.Error())
 		}
 	}
 
@@ -221,6 +228,11 @@ Deception runtime framework, happy hacking!`)
 		}
 
 		cloud := plugins.InitBeelzebubCloud(conf.URI, conf.AuthToken, func(newConfigs []parser.BeelzebubServiceConfiguration, hash string) {
+			// Don't enqueue if the builder is shutting down — reloadCh
+			// may be closed by Close() and writing to a closed chan panics.
+			if b.closing.Load() {
+				return
+			}
 			select {
 			case b.reloadCh <- newConfigs:
 			default:
@@ -268,6 +280,11 @@ func (b *Builder) Reload(newConfigs []parser.BeelzebubServiceConfiguration) erro
 	b.reloadMu.Lock()
 	defer b.reloadMu.Unlock()
 
+	if b.closing.Load() {
+		log.Warn("reload skipped: builder is closing")
+		return nil
+	}
+
 	log.Info("Hot-reloading configurations...")
 
 	oldConfigs := b.beelzebubServicesConfiguration
@@ -291,6 +308,7 @@ func (b *Builder) Reload(newConfigs []parser.BeelzebubServiceConfiguration) erro
 		if rbErr := b.Run(); rbErr != nil {
 			log.Fatalf("reload rollback also failed: %s", rbErr.Error())
 		}
+		b.closing.Store(false)
 		return fmt.Errorf("reload failed, rolled back to previous configs: %w", err)
 	}
 
@@ -298,6 +316,9 @@ func (b *Builder) Reload(newConfigs []parser.BeelzebubServiceConfiguration) erro
 	return nil
 }
 
+// build returns a degraded Builder for the initial startup phase.
+// Only the configuration and tracing fields survive; the caller should
+// use the original Builder (not the build copy) for Reload / Close.
 func (b *Builder) build() *Builder {
 	return &Builder{
 		beelzebubServicesConfiguration: b.beelzebubServicesConfiguration,

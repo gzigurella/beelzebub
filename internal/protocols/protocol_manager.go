@@ -24,6 +24,9 @@ func InitProtocolManager(tracerStrategy tracer.Strategy, strategies ...ServiceSt
 	}
 }
 
+// Deprecated: InitProtocolManager now accepts all strategies at construction.
+// SetProtocolStrategy is kept for test backward compatibility and has no
+// effect on InitService (which takes the strategy as a parameter directly).
 func (pm *ProtocolManager) SetProtocolStrategy(strategy ServiceStrategy) {
 	pm.strategies = append(pm.strategies, strategy)
 }

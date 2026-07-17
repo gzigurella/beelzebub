@@ -89,6 +89,7 @@ func (telnetStrategy *TelnetStrategy) StopAll() error {
 	if telnetStrategy.Sessions != nil {
 		telnetStrategy.Sessions.Close()
 	}
+	telnetStrategy.cleanerOnce = sync.Once{}
 
 	var errs []error
 	for _, listener := range telnetStrategy.listeners {
