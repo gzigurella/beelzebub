@@ -2,20 +2,24 @@ package MCP
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"time"
+
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	log "github.com/sirupsen/logrus"
-	"net"
-	"net/http"
 )
 
 type remoteAddrCtxKey struct{}
 
 type MCPStrategy struct {
+	servers []*server.StreamableHTTPServer
 }
 
 func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
@@ -35,7 +39,6 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			mcp.WithDescription(toolConfig.Description),
 		}
 
-		// Add tool annotations if configured
 		if toolConfig.Annotations != nil {
 			ann := toolConfig.Annotations
 			if ann.Title != "" {
@@ -86,21 +89,42 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		})
 	}
 
+	httpServer := server.NewStreamableHTTPServer(
+		mcpServer,
+		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			return context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
+		}),
+	)
+
+	mcpStrategy.servers = append(mcpStrategy.servers, httpServer)
+
 	go func() {
-		httpServer := server.NewStreamableHTTPServer(
-			mcpServer,
-			server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-				return context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
-			}),
-		)
 		if err := httpServer.Start(servConf.Address); err != nil {
 			log.Errorf("Failed to start MCP server on %s: %v", servConf.Address, err)
 			return
 		}
 	}()
+
 	log.WithFields(log.Fields{
 		"port":        servConf.Address,
 		"description": servConf.Description,
 	}).Infof("Init service %s", servConf.Protocol)
+	return nil
+}
+
+func (mcpStrategy *MCPStrategy) StopAll() error {
+	var errs []error
+	for _, srv := range mcpStrategy.servers {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Errorf("error shutting down MCP server: %s", err.Error())
+			errs = append(errs, err)
+		}
+		cancel()
+	}
+	mcpStrategy.servers = nil
+	if len(errs) > 0 {
+		return fmt.Errorf("mcp stop errors: %w", errors.Join(errs...))
+	}
 	return nil
 }

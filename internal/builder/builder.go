@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/MCP"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/TELNET"
@@ -36,6 +39,14 @@ type Builder struct {
 	logsFile                       *os.File
 	startedServices                []plugin.ServicePlugin
 	servicesCancel                 context.CancelFunc
+
+	protocolManager *protocols.ProtocolManager
+	prometheusServer *http.Server
+	beelzebubCloud  *plugins.BeelzebubCloud
+
+	reloadMu  sync.Mutex
+	reloadCh  chan []parser.BeelzebubServiceConfiguration
+	closing   atomic.Bool
 }
 
 func (b *Builder) setTraceStrategy(traceStrategy tracer.Strategy) {
@@ -79,7 +90,6 @@ func (b *Builder) buildRabbitMQ(rabbitMQURI string) error {
 		return err
 	}
 
-	//creates a queue if it doesn't already exist, or ensures that an existing queue matches the same parameters.
 	if _, err = b.rabbitMQChannel.QueueDeclare(RabbitmqQueueName, false, false, false, false, nil); err != nil {
 		return err
 	}
@@ -89,23 +99,44 @@ func (b *Builder) buildRabbitMQ(rabbitMQURI string) error {
 }
 
 func (b *Builder) Close() error {
-	// Stop background service plugins first so their goroutines drain before
-	// other teardown.
+	if !b.closing.CompareAndSwap(false, true) {
+		return nil
+	}
+
 	if b.servicesCancel != nil {
 		b.servicesCancel()
 	}
 	for _, svc := range b.startedServices {
 		svc.Stop()
 	}
+	b.startedServices = nil
+	b.servicesCancel = nil
 
-	// Close log file if it was opened
+	if b.protocolManager != nil {
+		if err := b.protocolManager.StopAll(); err != nil {
+			log.Errorf("error stopping protocol servers: %s", err.Error())
+		}
+	}
+
+	if b.beelzebubCloud != nil {
+		b.beelzebubCloud.Stop()
+	}
+
+	if b.prometheusServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := b.prometheusServer.Shutdown(ctx); err != nil {
+			log.Errorf("error shutting down Prometheus server: %s", err.Error())
+		}
+		cancel()
+		b.prometheusServer = nil
+	}
+
 	if b.logsFile != nil {
 		if err := b.logsFile.Close(); err != nil {
 			return err
 		}
 	}
 
-	// Close RabbitMQ connections
 	if b.rabbitMQConnection != nil {
 		if err := b.rabbitMQChannel.Close(); err != nil {
 			return err
@@ -113,6 +144,8 @@ func (b *Builder) Close() error {
 		if err := b.rabbitMQConnection.Close(); err != nil {
 			return err
 		}
+		b.rabbitMQChannel = nil
+		b.rabbitMQConnection = nil
 	}
 	return nil
 }
@@ -126,16 +159,23 @@ func (b *Builder) Run() error {
 ██   ██ ██      ██      ██       ███    ██      ██   ██ ██    ██ ██   ██ 
 ██████  ███████ ███████ ███████ ███████ ███████ ██████   ██████  ██████  
 Deception runtime framework, happy hacking!`)
-	// Init Prometheus openmetrics
-	go func() {
-		if (b.beelzebubCoreConfigurations.Core.Prometheus != parser.Prometheus{}) {
-			http.Handle(b.beelzebubCoreConfigurations.Core.Prometheus.Path, promhttp.Handler())
 
-			if err := http.ListenAndServe(b.beelzebubCoreConfigurations.Core.Prometheus.Port, nil); err != nil {
-				log.Fatalf("Error init Prometheus: %s", err.Error())
+	// Init Prometheus openmetrics with explicit server and custom mux
+	if (b.beelzebubCoreConfigurations.Core.Prometheus != parser.Prometheus{}) {
+		if b.prometheusServer == nil {
+			promMux := http.NewServeMux()
+			promMux.Handle(b.beelzebubCoreConfigurations.Core.Prometheus.Path, promhttp.Handler())
+			b.prometheusServer = &http.Server{
+				Addr:    b.beelzebubCoreConfigurations.Core.Prometheus.Port,
+				Handler: promMux,
 			}
+			go func() {
+				if err := b.prometheusServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("Error init Prometheus: %s", err.Error())
+				}
+			}()
 		}
-	}()
+	}
 
 	// Start registered background service plugins.
 	svcCtx, cancel := context.WithCancel(context.Background())
@@ -156,15 +196,40 @@ Deception runtime framework, happy hacking!`)
 	modelContextProtocolStrategy := &MCP.MCPStrategy{}
 	telnetStrategy := &TELNET.TelnetStrategy{}
 
-	// Init Tracer strategies, and set the trace strategy default HTTP
-	protocolManager := protocols.InitProtocolManager(b.traceStrategy, hypertextTransferProtocolStrategy)
+	b.protocolManager = protocols.InitProtocolManager(
+		b.traceStrategy,
+		secureShellStrategy,
+		hypertextTransferProtocolStrategy,
+		transmissionControlProtocolStrategy,
+		modelContextProtocolStrategy,
+		telnetStrategy,
+	)
 
 	if b.beelzebubCoreConfigurations.Core.BeelzebubCloud.Enabled {
 		conf := b.beelzebubCoreConfigurations.Core.BeelzebubCloud
 
-		beelzebubCloud := plugins.InitBeelzebubCloud(conf.URI, conf.AuthToken, true)
+		if b.reloadCh == nil {
+			b.reloadCh = make(chan []parser.BeelzebubServiceConfiguration, 1)
 
-		if honeypotsConfiguration, _, err := beelzebubCloud.GetHoneypotsConfigurations(); err != nil {
+			go func() {
+				for cfg := range b.reloadCh {
+					if err := b.Reload(cfg); err != nil {
+						log.Errorf("hot-reload failed: %s", err.Error())
+					}
+				}
+			}()
+		}
+
+		cloud := plugins.InitBeelzebubCloud(conf.URI, conf.AuthToken, func(newConfigs []parser.BeelzebubServiceConfiguration, hash string) {
+			select {
+			case b.reloadCh <- newConfigs:
+			default:
+			}
+		}, time.Duration(conf.PollingIntervalSeconds)*time.Second, nil)
+
+		b.beelzebubCloud = cloud
+
+		if honeypotsConfiguration, _, err := cloud.GetHoneypotsConfigurations(); err != nil {
 			return err
 		} else {
 			if len(honeypotsConfiguration) == 0 {
@@ -175,26 +240,61 @@ Deception runtime framework, happy hacking!`)
 	}
 
 	for _, beelzebubServiceConfiguration := range b.beelzebubServicesConfiguration {
+		var strategy protocols.ServiceStrategy
 		switch beelzebubServiceConfiguration.Protocol {
 		case "http":
-			protocolManager.SetProtocolStrategy(hypertextTransferProtocolStrategy)
+			strategy = hypertextTransferProtocolStrategy
 		case "ssh":
-			protocolManager.SetProtocolStrategy(secureShellStrategy)
+			strategy = secureShellStrategy
 		case "tcp":
-			protocolManager.SetProtocolStrategy(transmissionControlProtocolStrategy)
+			strategy = transmissionControlProtocolStrategy
 		case "mcp":
-			protocolManager.SetProtocolStrategy(modelContextProtocolStrategy)
+			strategy = modelContextProtocolStrategy
 		case "telnet":
-			protocolManager.SetProtocolStrategy(telnetStrategy)
+			strategy = telnetStrategy
 		default:
 			log.Fatalf("protocol %s not managed", beelzebubServiceConfiguration.Protocol)
 		}
 
-		if err := protocolManager.InitService(beelzebubServiceConfiguration); err != nil {
+		if err := b.protocolManager.InitService(beelzebubServiceConfiguration, strategy); err != nil {
 			return fmt.Errorf("error during init protocol: %s, %s", beelzebubServiceConfiguration.Protocol, err.Error())
 		}
 	}
 
+	return nil
+}
+
+func (b *Builder) Reload(newConfigs []parser.BeelzebubServiceConfiguration) error {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+
+	log.Info("Hot-reloading configurations...")
+
+	oldConfigs := b.beelzebubServicesConfiguration
+
+	b.Close()
+
+	b.beelzebubServicesConfiguration = newConfigs
+	b.protocolManager = nil
+
+	// Re-establish broker connections if they were configured
+	if b.beelzebubCoreConfigurations != nil && b.beelzebubCoreConfigurations.Core.Tracings.RabbitMQ.Enabled {
+		if err := b.buildRabbitMQ(b.beelzebubCoreConfigurations.Core.Tracings.RabbitMQ.URI); err != nil {
+			return fmt.Errorf("re-establishing RabbitMQ after reload: %w", err)
+		}
+	}
+
+	if err := b.Run(); err != nil {
+		log.Errorf("reload failed with new configs: %s; attempting rollback", err.Error())
+		b.beelzebubServicesConfiguration = oldConfigs
+		b.protocolManager = nil
+		if rbErr := b.Run(); rbErr != nil {
+			log.Fatalf("reload rollback also failed: %s", rbErr.Error())
+		}
+		return fmt.Errorf("reload failed, rolled back to previous configs: %w", err)
+	}
+
+	b.closing.Store(false)
 	return nil
 }
 
@@ -203,6 +303,7 @@ func (b *Builder) build() *Builder {
 		beelzebubServicesConfiguration: b.beelzebubServicesConfiguration,
 		traceStrategy:                  b.traceStrategy,
 		beelzebubCoreConfigurations:    b.beelzebubCoreConfigurations,
+		prometheusServer:               b.prometheusServer,
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -15,6 +14,8 @@ import (
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
+
+type OnConfigChanged func(newConfigs []parser.BeelzebubServiceConfiguration, hash string)
 
 type EventDTO struct {
 	DateTime        string
@@ -43,13 +44,14 @@ type EventDTO struct {
 	TLSServerName   string
 }
 
-type beelzebubCloud struct {
+type BeelzebubCloud struct {
 	URI             string
 	AuthToken       string
 	client          *resty.Client
 	PollingInterval time.Duration
 	ctx             context.Context
 	cancel          context.CancelFunc
+	onChange        OnConfigChanged
 }
 
 type HoneypotConfigResponseDTO struct {
@@ -59,17 +61,24 @@ type HoneypotConfigResponseDTO struct {
 	LastUpdatedOn string `json:"lastUpdatedOn"`
 }
 
-func InitBeelzebubCloud(uri, authToken string, enableVerifyConfigurationsChanged bool) *beelzebubCloud {
+func InitBeelzebubCloud(uri, authToken string, onChange OnConfigChanged, pollingInterval time.Duration, client *resty.Client) *BeelzebubCloud {
 	ctx, cancel := context.WithCancel(context.Background())
-	beelzebubCloud := &beelzebubCloud{
+	if pollingInterval <= 0 {
+		pollingInterval = 15 * time.Second
+	}
+	if client == nil {
+		client = resty.New()
+	}
+	beelzebubCloud := &BeelzebubCloud{
 		URI:             uri,
 		AuthToken:       authToken,
-		client:          resty.New(),
-		PollingInterval: 15 * time.Second,
+		client:          client,
+		PollingInterval: pollingInterval,
 		ctx:             ctx,
 		cancel:          cancel,
+		onChange:        onChange,
 	}
-	if enableVerifyConfigurationsChanged {
+	if onChange != nil {
 		go func() {
 			if err := beelzebubCloud.verifyConfigurationsChanged(); err != nil {
 				log.Fatalf("Error verify configurations changed: %s", err.Error())
@@ -79,7 +88,7 @@ func InitBeelzebubCloud(uri, authToken string, enableVerifyConfigurationsChanged
 	return beelzebubCloud
 }
 
-func (beelzebubCloud *beelzebubCloud) SendEvent(event tracer.Event) (bool, error) {
+func (beelzebubCloud *BeelzebubCloud) SendEvent(event tracer.Event) (bool, error) {
 	eventDTO, err := beelzebubCloud.mapToEventDTO(event)
 	if err != nil {
 		return false, err
@@ -110,7 +119,7 @@ func (beelzebubCloud *beelzebubCloud) SendEvent(event tracer.Event) (bool, error
 	return response.StatusCode() == 200, nil
 }
 
-func (beelzebubCloud *beelzebubCloud) GetHoneypotsConfigurations() ([]parser.BeelzebubServiceConfiguration, string, error) {
+func (beelzebubCloud *BeelzebubCloud) GetHoneypotsConfigurations() ([]parser.BeelzebubServiceConfiguration, string, error) {
 	if beelzebubCloud.AuthToken == "" {
 		return nil, "", errors.New("authToken is empty")
 	}
@@ -163,21 +172,19 @@ func (beelzebubCloud *beelzebubCloud) GetHoneypotsConfigurations() ([]parser.Bee
 	return servicesConfiguration, localHashBuilder.String(), nil
 }
 
-var exitFunction func(code int) = os.Exit
-
-func (beelzebubCloud *beelzebubCloud) Stop() {
+func (beelzebubCloud *BeelzebubCloud) Stop() {
 	beelzebubCloud.cancel()
 }
 
-func (beelzebubCloud *beelzebubCloud) checkConfigurationsChanged(lastHash string) (newHash string, changed bool, err error) {
-	_, configurationsHash, err := beelzebubCloud.GetHoneypotsConfigurations()
+func (beelzebubCloud *BeelzebubCloud) checkConfigurationsChanged(lastHash string) (configs []parser.BeelzebubServiceConfiguration, newHash string, changed bool, err error) {
+	configs, configurationsHash, err := beelzebubCloud.GetHoneypotsConfigurations()
 	if err != nil {
-		return "", false, err
+		return nil, "", false, err
 	}
-	return configurationsHash, lastHash != "" && lastHash != configurationsHash, nil
+	return configs, configurationsHash, lastHash != "" && lastHash != configurationsHash, nil
 }
 
-func (beelzebubCloud *beelzebubCloud) verifyConfigurationsChanged() error {
+func (beelzebubCloud *BeelzebubCloud) verifyConfigurationsChanged() error {
 	var lastHash = ""
 	for {
 		select {
@@ -186,13 +193,15 @@ func (beelzebubCloud *beelzebubCloud) verifyConfigurationsChanged() error {
 		default:
 		}
 
-		newHash, changed, err := beelzebubCloud.checkConfigurationsChanged(lastHash)
+		configs, newHash, changed, err := beelzebubCloud.checkConfigurationsChanged(lastHash)
 		if err != nil {
 			return err
 		}
 		if changed {
 			log.Debug("Configurations changed.")
-			exitFunction(0)
+			if beelzebubCloud.onChange != nil {
+				beelzebubCloud.onChange(configs, newHash)
+			}
 		}
 		lastHash = newHash
 		select {
@@ -203,7 +212,7 @@ func (beelzebubCloud *beelzebubCloud) verifyConfigurationsChanged() error {
 	}
 }
 
-func (beelzebubCloud *beelzebubCloud) mapToEventDTO(event tracer.Event) (EventDTO, error) {
+func (beelzebubCloud *BeelzebubCloud) mapToEventDTO(event tracer.Event) (EventDTO, error) {
 	eventDTO := EventDTO{
 		DateTime:        event.DateTime,
 		RemoteAddr:      event.RemoteAddr,

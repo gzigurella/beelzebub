@@ -1,6 +1,8 @@
 package builder
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +11,7 @@ import (
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuilderClose_LogFile(t *testing.T) {
@@ -152,4 +155,226 @@ func TestBuildRabbitMQ_InvalidURI(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected error building RabbitMQ with invalid URI")
 	}
+}
+
+func TestBuilderRun_Prometheus(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{
+		Core: struct {
+			Logging        parser.Logging        `yaml:"logging"`
+			Tracings       parser.Tracings       `yaml:"tracings"`
+			Prometheus     parser.Prometheus     `yaml:"prometheus"`
+			BeelzebubCloud parser.BeelzebubCloud `yaml:"beelzebub-cloud"`
+		}{
+			Prometheus: parser.Prometheus{
+				Path: "/metrics",
+				Port: "127.0.0.1:0",
+			},
+		},
+	}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	err := b.Run()
+	assert.NoError(t, err)
+	assert.NotNil(t, b.prometheusServer)
+
+	time.Sleep(50 * time.Millisecond)
+}
+
+func TestBuilderReload(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:0"},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	err := b.Run()
+	assert.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	newConfigs := []parser.BeelzebubServiceConfiguration{
+		{Protocol: "tcp", Address: "127.0.0.1:0"},
+	}
+
+	err = b.Reload(newConfigs)
+	assert.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	err = b.Close()
+	assert.NoError(t, err)
+}
+
+func TestBuilderReload_RollbackOnFailure(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:0"},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	err := b.Run()
+	require.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	// Reload with invalid config that will fail Run().
+	// TCP Init with a missing port causes net.Listen to error out.
+	invalidConfigs := []parser.BeelzebubServiceConfiguration{
+		{Protocol: "tcp", Address: "invalid-address-no-port"},
+	}
+	err = b.Reload(invalidConfigs)
+	require.Error(t, err)                // should report the reload failure
+	require.Contains(t, err.Error(), "reload failed, rolled back")
+
+	// After rollback, old config should be running.
+	// Close returns nil even though `closing` is already true
+	// (set during the Reload → Close → rollback flow).
+	err = b.Close()
+	require.NoError(t, err)
+}
+
+func TestBuilderClose_WithCloud(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:0"},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	err := b.Run()
+	require.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	// Close should succeed even without beelzebubCloud set
+	err = b.Close()
+	require.NoError(t, err)
+}
+
+func TestBuilderClose_WithProtocols(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:0"},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	err := b.Run()
+	assert.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	err = b.Close()
+	assert.NoError(t, err)
+
+	// Second close should be a no-op (atomic guard)
+	err = b.Close()
+	assert.NoError(t, err)
+}
+
+func TestBuilderReload_EndToEnd(t *testing.T) {
+	l1, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port1 := l1.Addr().(*net.TCPAddr).Port
+	l1.Close()
+
+	l2, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port2 := l2.Addr().(*net.TCPAddr).Port
+	l2.Close()
+
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: fmt.Sprintf("127.0.0.1:%d", port1)},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	require.NoError(t, b.Run())
+	time.Sleep(200 * time.Millisecond)
+
+	// Port1 should be open after Run
+	conn1, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port1), 2*time.Second)
+	require.NoError(t, err, "port1 should be open after Run")
+	conn1.Close()
+
+	// Port2 should be closed before Reload
+	_, err = net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port2), 500*time.Millisecond)
+	require.Error(t, err, "port2 should be closed before Reload")
+
+	// Reload to port2
+	newConfigs := []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: fmt.Sprintf("127.0.0.1:%d", port2)},
+	}
+	require.NoError(t, b.Reload(newConfigs))
+	time.Sleep(200 * time.Millisecond)
+
+	// Port1 should be closed after Reload
+	_, err = net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port1), 500*time.Millisecond)
+	require.Error(t, err, "port1 should be closed after Reload")
+
+	// Port2 should be open after Reload
+	conn2, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port2), 2*time.Second)
+	require.NoError(t, err, "port2 should be open after Reload")
+	conn2.Close()
+
+	require.NoError(t, b.Close())
+}
+
+func TestBuilderReload_EndToEnd_WithReloadCh(t *testing.T) {
+	l1, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port1 := l1.Addr().(*net.TCPAddr).Port
+	l1.Close()
+
+	l2, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port2 := l2.Addr().(*net.TCPAddr).Port
+	l2.Close()
+
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: fmt.Sprintf("127.0.0.1:%d", port1)},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+	b.reloadCh = make(chan []parser.BeelzebubServiceConfiguration, 1)
+
+	// Start the reload consumer manually (same as Run() does when cloud is enabled)
+	go func() {
+		for cfg := range b.reloadCh {
+			if err := b.Reload(cfg); err != nil {
+				t.Logf("reload from channel failed: %s", err.Error())
+			}
+		}
+	}()
+
+	require.NoError(t, b.Run())
+	time.Sleep(200 * time.Millisecond)
+
+	// Port1 should be open after Run
+	conn1, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port1), 2*time.Second)
+	require.NoError(t, err, "port1 should be open after Run")
+	conn1.Close()
+
+	// Write new configs to reloadCh (simulating cloud config change)
+	newConfigs := []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: fmt.Sprintf("127.0.0.1:%d", port2)},
+	}
+	b.reloadCh <- newConfigs
+	time.Sleep(300 * time.Millisecond)
+
+	// Port1 should be closed after reload
+	_, err = net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port1), 500*time.Millisecond)
+	require.Error(t, err, "port1 should be closed after channel reload")
+
+	// Port2 should be open after reload
+	conn2, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port2), 2*time.Second)
+	require.NoError(t, err, "port2 should be open after channel reload")
+	conn2.Close()
+
+	close(b.reloadCh)
+	require.NoError(t, b.Close())
 }

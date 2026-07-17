@@ -1,11 +1,17 @@
 package MCP
 
 import (
+	"errors"
+	"net"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockTracer struct {
@@ -58,26 +64,21 @@ func TestMCPStrategy_Init_ToolWithParams(t *testing.T) {
 	strategy := &MCPStrategy{}
 	mt := &mockTracer{}
 
-	readOnly := true
-	destructive := false
-
 	servConf := parser.BeelzebubServiceConfiguration{
 		Address:     "127.0.0.1:0",
 		Description: "test MCP server",
 		Protocol:    "mcp",
 		Tools: []parser.Tool{
 			{
-				Name:        "tool:query-logs",
-				Description: "Query system logs",
-				Annotations: &parser.ToolAnnotations{
-					Title:           "Query Logs",
-					ReadOnlyHint:    &readOnly,
-					DestructiveHint: &destructive,
-				},
+				Name:        "greet",
+				Description: "A greeting tool",
+				Handler:     "Hello!",
 				Params: []parser.Param{
-					{Name: "filter", Description: "Log filter"},
+					{
+						Name:        "name",
+						Description: "Name to greet",
+					},
 				},
-				Handler: "log_result",
 			},
 		},
 	}
@@ -86,36 +87,110 @@ func TestMCPStrategy_Init_ToolWithParams(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestMCPStrategy_Init_ToolWithAllAnnotations(t *testing.T) {
+func TestMCPStrategy_Init_ToolWithAnnotations(t *testing.T) {
 	strategy := &MCPStrategy{}
 	mt := &mockTracer{}
-
-	trueVal := true
-	falseVal := false
+	readOnly := true
 
 	servConf := parser.BeelzebubServiceConfiguration{
 		Address:     "127.0.0.1:0",
-		Description: "test MCP server",
+		Description: "test MCP server with annotations",
 		Protocol:    "mcp",
 		Tools: []parser.Tool{
 			{
-				Name:        "tool:full-annotations",
-				Description: "Tool with all annotations",
+				Name:        "annotated-tool",
+				Description: "An annotated tool",
+				Handler:     "annotated response",
 				Annotations: &parser.ToolAnnotations{
-					Title:           "Full Annotations Tool",
-					ReadOnlyHint:    &trueVal,
-					DestructiveHint: &falseVal,
-					IdempotentHint:  &trueVal,
-					OpenWorldHint:   &falseVal,
+					Title:         "My Tool",
+					ReadOnlyHint:  &readOnly,
+					IdempotentHint: &readOnly,
 				},
 				Params: []parser.Param{
-					{Name: "param1", Description: "First param"},
+					{
+						Name:        "input",
+						Description: "Input param",
+					},
 				},
-				Handler: "handler_result",
 			},
 		},
 	}
 
 	err := strategy.Init(servConf, mt)
 	assert.NoError(t, err)
+}
+
+func TestMCPStrategy_StopAll(t *testing.T) {
+	strategy := &MCPStrategy{}
+	mt := &mockTracer{}
+
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:     "127.0.0.1:0",
+		Description: "test MCP server",
+		Protocol:    "mcp",
+		Tools:       []parser.Tool{},
+	}
+
+	assert.NoError(t, strategy.Init(servConf, mt))
+	assert.Len(t, strategy.servers, 1)
+
+	assert.NoError(t, strategy.StopAll())
+	assert.Nil(t, strategy.servers)
+}
+
+func TestMCPStrategy_StopAll_Empty(t *testing.T) {
+	strategy := &MCPStrategy{}
+	assert.NoError(t, strategy.StopAll())
+}
+
+func TestMCPStrategy_StopAll_MultipleInits(t *testing.T) {
+	strategy := &MCPStrategy{}
+	mt := &mockTracer{}
+
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:     "127.0.0.1:0",
+		Description: "test MCP server",
+		Protocol:    "mcp",
+		Tools:       []parser.Tool{},
+	}
+
+	assert.NoError(t, strategy.Init(servConf, mt))
+	assert.NoError(t, strategy.Init(servConf, mt))
+	assert.Len(t, strategy.servers, 2)
+
+	assert.NoError(t, strategy.StopAll())
+	assert.Nil(t, strategy.servers)
+}
+
+type failOnCloseListener struct {
+	net.Listener
+	closeErr error
+}
+
+func (f *failOnCloseListener) Close() error {
+	f.Listener.Close()
+	return f.closeErr
+}
+
+func TestMCPStrategy_StopAll_ShutdownError(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	failL := &failOnCloseListener{Listener: l, closeErr: errors.New("simulated close error")}
+
+	rawSrv := &http.Server{Handler: http.NewServeMux()}
+	go rawSrv.Serve(failL)
+	time.Sleep(50 * time.Millisecond)
+
+	mcpServer := server.NewMCPServer("test", "1.0.0")
+	httpServer := server.NewStreamableHTTPServer(mcpServer,
+		server.WithStreamableHTTPServer(rawSrv),
+	)
+
+	strategy := &MCPStrategy{}
+	strategy.servers = append(strategy.servers, httpServer)
+
+	err = strategy.StopAll()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated close error")
+	assert.Nil(t, strategy.servers)
 }

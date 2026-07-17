@@ -1,11 +1,16 @@
 package SSH
 
 import (
+	"errors"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
+	"github.com/gliderlabs/ssh"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockTracer struct {
@@ -83,3 +88,86 @@ func TestSSHStrategy_Init_InvalidAddress(t *testing.T) {
 	// SSH runs the listener asynchronously; Init itself should not return an error.
 	assert.NoError(t, strategy.Init(servConf, mt))
 }
+
+func TestSSHStrategy_StopAll(t *testing.T) {
+	strategy := &SSHStrategy{}
+	mt := &mockTracer{}
+
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:                "127.0.0.1:0",
+		Description:            "test SSH",
+		DeadlineTimeoutSeconds: 2,
+		PasswordRegex:          ".*",
+	}
+
+	assert.NoError(t, strategy.Init(servConf, mt))
+	assert.Len(t, strategy.servers, 1)
+
+	assert.NoError(t, strategy.StopAll())
+	assert.Nil(t, strategy.servers)
+}
+
+func TestSSHStrategy_StopAll_Empty(t *testing.T) {
+	strategy := &SSHStrategy{}
+	assert.NoError(t, strategy.StopAll())
+}
+
+func TestSSHStrategy_StopAll_MultipleInits(t *testing.T) {
+	strategy := &SSHStrategy{}
+	mt := &mockTracer{}
+
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:                "127.0.0.1:0",
+		Description:            "test SSH",
+		DeadlineTimeoutSeconds: 1,
+		PasswordRegex:          ".*",
+	}
+
+	assert.NoError(t, strategy.Init(servConf, mt))
+	assert.NoError(t, strategy.Init(servConf, mt))
+	assert.Len(t, strategy.servers, 2)
+
+	assert.NoError(t, strategy.StopAll())
+	assert.Nil(t, strategy.servers)
+
+	// Verify servers can be restarted after StopAll
+	assert.NoError(t, strategy.Init(servConf, mt))
+	assert.Len(t, strategy.servers, 1)
+
+	time.Sleep(100 * time.Millisecond)
+	assert.NoError(t, strategy.StopAll())
+}
+
+type failOnCloseListener struct {
+	net.Listener
+	closeErr error
+}
+
+func (f *failOnCloseListener) Close() error {
+	f.Listener.Close()
+	return f.closeErr
+}
+
+func TestSSHStrategy_StopAll_ShutdownError(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	failL := &failOnCloseListener{Listener: l, closeErr: errors.New("simulated close error")}
+
+	server := &ssh.Server{
+		Handler: ssh.Handler(func(s ssh.Session) {}),
+	}
+	go func() {
+		server.Serve(failL)
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	strategy := &SSHStrategy{}
+	strategy.servers = append(strategy.servers, server)
+
+	err = strategy.StopAll()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated close error")
+	assert.Nil(t, strategy.servers)
+}
+
+

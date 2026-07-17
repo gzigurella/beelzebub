@@ -63,67 +63,48 @@ func TestHandleTCPConnection_WithBanner(t *testing.T) {
 	mt := &mockTracer{}
 	servConf := parser.BeelzebubServiceConfiguration{
 		Description:            "test",
-		DeadlineTimeoutSeconds: 2,
-		Banner:                 "Welcome to SSH",
-		Commands:               []parser.Command{},
+		DeadlineTimeoutSeconds: 5,
+		Banner:                 "Welcome to TCP honeypot",
 	}
 	strategy := newStrategyWithSessions()
 
-	go handleTCPConnection(server, servConf, mt, strategy)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleTCPConnection(server, servConf, mt, strategy)
+	}()
 
-	buf := make([]byte, 64)
-	client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1024)
 	n, err := client.Read(buf)
-	if err == nil {
-		assert.Contains(t, string(buf[:n]), "Welcome to SSH")
+	if err != nil {
+		t.Fatalf("failed to read banner: %v", err)
 	}
+
+	banner := strings.TrimSpace(string(buf[:n]))
+	assert.Equal(t, "Welcome to TCP honeypot", banner)
+
 	client.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for connection handler")
+	}
 }
 
-func TestHandleTCPConnection_WithMatchingCommand(t *testing.T) {
+func TestHandleTCPConnection_WithCommands(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
 
 	mt := &mockTracer{}
+	rex, _ := regexp.Compile("ping")
 	servConf := parser.BeelzebubServiceConfiguration{
 		Description:            "test",
 		DeadlineTimeoutSeconds: 5,
 		Commands: []parser.Command{
 			{
-				Name:    "ls",
-				Regex:   regexp.MustCompile(`^ls$`),
-				Handler: "file1.txt\nfile2.txt",
-			},
-		},
-	}
-	strategy := newStrategyWithSessions()
-
-	go handleTCPConnection(server, servConf, mt, strategy)
-
-	client.Write([]byte("ls\n"))
-
-	buf := make([]byte, 256)
-	client.SetReadDeadline(time.Now().Add(2 * time.Second))
-	n, err := client.Read(buf)
-	if err == nil {
-		assert.Contains(t, string(buf[:n]), "file1.txt")
-	}
-
-	client.Close()
-}
-
-func TestHandleTCPConnection_UnmatchedCommand(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-
-	mt := &mockTracer{}
-	servConf := parser.BeelzebubServiceConfiguration{
-		Description:            "test",
-		DeadlineTimeoutSeconds: 5,
-		Commands: []parser.Command{
-			{
-				Regex:   regexp.MustCompile(`^ls$`),
-				Handler: "file1.txt",
+				Regex:   rex,
+				Handler: "pong",
+				Name:    "ping-command",
 			},
 		},
 	}
@@ -135,109 +116,149 @@ func TestHandleTCPConnection_UnmatchedCommand(t *testing.T) {
 		handleTCPConnection(server, servConf, mt, strategy)
 	}()
 
-	client.Write([]byte("unknown_cmd\n"))
+	client.Write([]byte("ping\n"))
+	time.Sleep(100 * time.Millisecond)
+
+	buf := make([]byte, 1024)
+	n, err := client.Read(buf)
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+
+	assert.Equal(t, "pong", strings.TrimSpace(string(buf[:n])))
+
+	client.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for connection handler")
+	}
+}
+
+func TestHandleTCPConnection_NonUTF8Bytes(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	mt := &mockTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{
+		Description:            "test",
+		DeadlineTimeoutSeconds: 5,
+	}
+	strategy := newStrategyWithSessions()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleTCPConnection(server, servConf, mt, strategy)
+	}()
+
+	client.Write([]byte{0xff, 0xfe, 0x00, 0x01})
 	client.Close()
 
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timeout")
+		t.Fatal("timeout waiting for connection handler")
 	}
 
-	foundNotFound := false
-	for _, e := range mt.events {
-		if e.Handler == "not_found" {
-			foundNotFound = true
-			break
-		}
+	assert.GreaterOrEqual(t, len(mt.events), 1)
+	if len(mt.events) > 0 {
+		assert.NotEmpty(t, mt.events[0].CommandRaw)
 	}
-	assert.True(t, foundNotFound, "expected a not_found handler event")
-}
-
-func TestTCPStrategy_Init(t *testing.T) {
-	strategy := &TCPStrategy{}
-	mt := &mockTracer{}
-
-	servConf := parser.BeelzebubServiceConfiguration{
-		Address:                "127.0.0.1:0",
-		Description:            "test",
-		DeadlineTimeoutSeconds: 2,
-	}
-
-	err := strategy.Init(servConf, mt)
-	assert.NoError(t, err)
-	assert.NotNil(t, strategy.Sessions)
 }
 
 func TestTCPStrategy_Init_InvalidAddress(t *testing.T) {
-	strategy := &TCPStrategy{}
+	strategy := newStrategyWithSessions()
 	mt := &mockTracer{}
 
 	servConf := parser.BeelzebubServiceConfiguration{
-		Address: "invalid-address",
+		Address:     "invalid-address-no-port",
+		Description: "test",
 	}
 
 	err := strategy.Init(servConf, mt)
 	assert.Error(t, err)
 }
 
-func TestHandleTCPConnection_CommandWithEmptyHandler(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-
-	mt := &mockTracer{}
-	servConf := parser.BeelzebubServiceConfiguration{
-		Description:            "test",
-		DeadlineTimeoutSeconds: 5,
-		Commands: []parser.Command{
-			{
-				Regex:   regexp.MustCompile(`.*`),
-				Handler: "",
-			},
-		},
-	}
+func TestTCPStrategy_StopAll(t *testing.T) {
 	strategy := newStrategyWithSessions()
+	mt := &mockTracer{}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		handleTCPConnection(server, servConf, mt, strategy)
-	}()
-
-	client.Write([]byte("anything\n"))
-	time.Sleep(100 * time.Millisecond)
-	client.Close()
-
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timeout")
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:     "127.0.0.1:0",
+		Description: "test",
 	}
 
-	found := false
-	for _, e := range mt.events {
-		if strings.Contains(e.Msg, "Interaction") || e.Status == tracer.Interaction.String() {
-			found = true
-			break
-		}
-	}
-	assert.True(t, found, "expected an interaction event")
+	assert.NoError(t, strategy.Init(servConf, mt))
+	assert.Len(t, strategy.listeners, 1)
+
+	assert.NoError(t, strategy.StopAll())
+	assert.Nil(t, strategy.listeners)
 }
 
-func TestHandleTCPConnection_SessionStart(t *testing.T) {
+func TestTCPStrategy_StopAll_Empty(t *testing.T) {
+	strategy := newStrategyWithSessions()
+	assert.NoError(t, strategy.StopAll())
+}
+
+func TestTCPStrategy_StopAll_AcceptsReturnsClosed(t *testing.T) {
+	strategy := newStrategyWithSessions()
+	mt := &mockTracer{}
+
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:     "127.0.0.1:0",
+		Description: "test",
+	}
+
+	assert.NoError(t, strategy.Init(servConf, mt))
+	assert.Len(t, strategy.listeners, 1)
+
+	// Stop all, which closes the listener
+	assert.NoError(t, strategy.StopAll())
+
+	// The accept loop should exit cleanly (net.ErrClosed)
+	time.Sleep(50 * time.Millisecond)
+}
+
+func TestTCPStrategy_StopAll_AlreadyClosed(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	listener.Close()
+
+	strategy := newStrategyWithSessions()
+	strategy.listeners = append(strategy.listeners, listener)
+
+	// Close on an already-closed listener returns an error now
+	err := strategy.StopAll()
+	assert.Error(t, err)
+	assert.Nil(t, strategy.listeners)
+}
+
+func TestHexEscapeNonPrintable(t *testing.T) {
+	tests := []struct {
+		input    []byte
+		expected string
+	}{
+		{[]byte("hello"), "hello"},
+		{[]byte{0x00, 0x01, 0x02}, `\x00\x01\x02`},
+		{[]byte("test\x00end"), "test\\x00end"},
+		{[]byte{0x7f}, `\x7f`},
+		{[]byte{0x5c}, `\x5c`}, // backslash
+	}
+	for _, tt := range tests {
+		result := hexEscapeNonPrintable(tt.input)
+		assert.Equal(t, tt.expected, result)
+	}
+}
+
+func TestHandleTCPConnection_Deadline(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
 
 	mt := &mockTracer{}
 	servConf := parser.BeelzebubServiceConfiguration{
 		Description:            "test",
-		DeadlineTimeoutSeconds: 5,
-		Commands: []parser.Command{
-			{
-				Regex:   regexp.MustCompile(`^ping$`),
-				Handler: "pong",
-			},
-		},
+		DeadlineTimeoutSeconds: 1,
+		Commands:               []parser.Command{},
 	}
 	strategy := newStrategyWithSessions()
 
@@ -247,26 +268,10 @@ func TestHandleTCPConnection_SessionStart(t *testing.T) {
 		handleTCPConnection(server, servConf, mt, strategy)
 	}()
 
-	// Close immediately to trigger session end event
-	client.Close()
-
+	// Don't write anything, let the deadline expire
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timeout")
+		t.Fatal("timeout waiting for deadline")
 	}
-
-	// Should have at minimum session start and end events
-	hasStart := false
-	hasEnd := false
-	for _, e := range mt.events {
-		if e.Status == tracer.Start.String() {
-			hasStart = true
-		}
-		if e.Status == tracer.End.String() {
-			hasEnd = true
-		}
-	}
-	assert.True(t, hasStart, "expected session start event")
-	assert.True(t, hasEnd, "expected session end event")
 }

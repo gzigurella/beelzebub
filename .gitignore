@@ -12,3 +12,4 @@ integration_test/certs/tls.key
 /beelzebub
 /.beelzebub-mode
 /plugins/*/
+.opencode/

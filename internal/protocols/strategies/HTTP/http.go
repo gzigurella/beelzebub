@@ -2,11 +2,13 @@ package HTTP
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/plugins"
@@ -17,7 +19,9 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type HTTPStrategy struct{}
+type HTTPStrategy struct {
+	servers []*http.Server
+}
 
 type httpResponse struct {
 	StatusCode int
@@ -25,7 +29,7 @@ type httpResponse struct {
 	Body       string
 }
 
-func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	serverMux := http.NewServeMux()
 
 	serverMux.HandleFunc("/", func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -45,8 +49,6 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 				break
 			}
 		}
-		// If none of the main commands matched, and we have a fallback command configured, process it here.
-		// The regexp is ignored for fallback commands, as they are catch-all for any request.
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
@@ -62,17 +64,22 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 		fmt.Fprint(responseWriter, resp.Body)
 
 	})
+
+	srv := &http.Server{
+		Addr:    servConf.Address,
+		Handler: serverMux,
+	}
+
+	httpStrategy.servers = append(httpStrategy.servers, srv)
+
 	go func() {
 		var err error
-		// Launch a TLS supporting server if we are supplied a TLS Key and Certificate.
-		// If relative paths are supplied, they are relative to the CWD of the binary.
-		// The can be self-signed, only the client will validate this (or not).
 		if servConf.TLSKeyPath != "" && servConf.TLSCertPath != "" {
-			err = http.ListenAndServeTLS(servConf.Address, servConf.TLSCertPath, servConf.TLSKeyPath, serverMux)
+			err = srv.ListenAndServeTLS(servConf.TLSCertPath, servConf.TLSKeyPath)
 		} else {
-			err = http.ListenAndServe(servConf.Address, serverMux)
+			err = srv.ListenAndServe()
 		}
-		if err != nil {
+		if err != nil && err != http.ErrServerClosed {
 			log.Errorf("error during init HTTP Protocol: %v", err)
 			return
 		}
@@ -85,6 +92,23 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 	return nil
 }
 
+func (httpStrategy *HTTPStrategy) StopAll() error {
+	var errs []error
+	for _, srv := range httpStrategy.servers {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Errorf("error shutting down HTTP server: %s", err.Error())
+			errs = append(errs, err)
+		}
+		cancel()
+	}
+	httpStrategy.servers = nil
+	if len(errs) > 0 {
+		return fmt.Errorf("http stop errors: %w", errors.Join(errs...))
+	}
+	return nil
+}
+
 func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request) (httpResponse, error) {
 	resp := httpResponse{
 		Body:       command.Handler,
@@ -92,7 +116,6 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		StatusCode: command.StatusCode,
 	}
 
-	// Limit body read to 1MB to prevent DoS attacks
 	bodyBytes, err := io.ReadAll(io.LimitReader(request.Body, 1024*1024))
 	body := ""
 	if err == nil {
@@ -117,9 +140,6 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 			}
 			resp.Body = output
 		} else if hp, ok := plugin.GetHTTP(command.Plugin); ok {
-			// For HTTP-specific plugins (e.g. MazeHoneypot) that need full
-			// request context and return their own status/headers.
-			// ServerVersion and ServerName are injected here from service config.
 			if command.Plugin == plugins.MazePluginName {
 				maze := &plugins.MazeHoneypot{
 					ServerVersion: servConf.ServerVersion,
@@ -175,7 +195,6 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		Description:     HoneypotDescription,
 		Handler:         command.Name,
 	}
-	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {
 		event.Msg = "HTTPS New Request"
 		event.TLSServerName = request.TLS.ServerName
@@ -282,7 +301,6 @@ func setResponseHeaders(responseWriter http.ResponseWriter, headers []string, st
 			responseWriter.Header().Add(keyValue[0], keyValue[1])
 		}
 	}
-	// http.StatusText(statusCode): empty string if the code is unknown.
 	if len(http.StatusText(statusCode)) > 0 {
 		responseWriter.WriteHeader(statusCode)
 	}

@@ -16,7 +16,7 @@ import (
 )
 
 func TestBuildSendEventFailValidation(t *testing.T) {
-	beelzebubCloud := InitBeelzebubCloud("", "", false)
+	beelzebubCloud := InitBeelzebubCloud("", "", nil, 0, nil)
 
 	_, err := beelzebubCloud.SendEvent(tracer.Event{})
 
@@ -41,7 +41,7 @@ func TestBuildSendEventWithResults(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
 	//When
@@ -66,7 +66,7 @@ func TestBuildSendEventErro(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
 	//When
@@ -100,7 +100,7 @@ func TestGetHoneypotsConfigurationsWithResults(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
 	//When
@@ -137,7 +137,7 @@ func TestGetHoneypotsConfigurationsWithResults(t *testing.T) {
 
 func TestGetHoneypotsConfigurationsWithErrorValidation(t *testing.T) {
 	//Given
-	beelzebubCloud := InitBeelzebubCloud("", "", false)
+	beelzebubCloud := InitBeelzebubCloud("", "", nil, 0, nil)
 
 	//When
 	result, _, err := beelzebubCloud.GetHoneypotsConfigurations()
@@ -161,7 +161,7 @@ func TestGetHoneypotsConfigurationsWithErrorAPI(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
 	//When
@@ -190,7 +190,7 @@ func TestGetHoneypotsConfigurationsWithErrorUnmarshal(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
 	//When
@@ -225,7 +225,7 @@ func TestGetHoneypotsConfigurationsWithErrorDeserializeYaml(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
 	//When
@@ -256,10 +256,10 @@ func TestCheckConfigurationsChanged_FirstCall(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
-	newHash, changed, err := beelzebubCloud.checkConfigurationsChanged("")
+	_, newHash, changed, err := beelzebubCloud.checkConfigurationsChanged("")
 	assert.Nil(t, err)
 	assert.False(t, changed)
 	assert.NotEmpty(t, newHash)
@@ -290,15 +290,15 @@ func TestCheckConfigurationsChanged_ConfigsChanged(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
-	firstHash, changed, err := beelzebubCloud.checkConfigurationsChanged("")
+	_, firstHash, changed, err := beelzebubCloud.checkConfigurationsChanged("")
 	assert.Nil(t, err)
 	assert.False(t, changed)
 	assert.NotEmpty(t, firstHash)
 
-	secondHash, changed, err := beelzebubCloud.checkConfigurationsChanged(firstHash)
+	_, secondHash, changed, err := beelzebubCloud.checkConfigurationsChanged(firstHash)
 	assert.Nil(t, err)
 	assert.True(t, changed)
 	assert.NotEqual(t, firstHash, secondHash)
@@ -317,10 +317,10 @@ func TestCheckConfigurationsChanged_HTTPError(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
-	newHash, changed, err := beelzebubCloud.checkConfigurationsChanged("")
+	_, newHash, changed, err := beelzebubCloud.checkConfigurationsChanged("")
 	assert.NotNil(t, err)
 	assert.Empty(t, newHash)
 	assert.False(t, changed)
@@ -350,39 +350,28 @@ func TestVerifyConfigurationsChanged_StopsOnDone(t *testing.T) {
 		},
 	)
 
-	exitCalled := make(chan struct{}, 1)
-	origExit := exitFunction
-	defer func() { exitFunction = origExit }()
-	exitFunction = func(c int) {
-		exitCalled <- struct{}{}
-	}
+	onChangeCalled := make(chan struct{}, 1)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
-	beelzebubCloud.client = client
-	beelzebubCloud.PollingInterval = 50 * time.Millisecond
-
-	done := make(chan error, 1)
-	go func() {
-		done <- beelzebubCloud.verifyConfigurationsChanged()
-	}()
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", func(configs []parser.BeelzebubServiceConfiguration, hash string) {
+		onChangeCalled <- struct{}{}
+	}, 50*time.Millisecond, client)
 
 	select {
-	case <-exitCalled:
+	case <-onChangeCalled:
 		assert.Greater(t, callCount, 1)
 	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for exitFunction")
+		t.Fatal("timeout waiting for onChange callback")
 	}
 
-	exitFunction = func(c int) {}
 	beelzebubCloud.Stop()
-	httpmock.DeactivateAndReset()
 
-	select {
-	case err := <-done:
-		assert.Nil(t, err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for goroutine to stop")
-	}
+	// Verify the goroutine stops: no more callbacks after Stop()
+	time.Sleep(100 * time.Millisecond)
+	afterStop := callCount
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, afterStop, callCount, "goroutine should stop after Stop()")
+
+	httpmock.DeactivateAndReset()
 }
 
 func TestVerifyConfigurationsChanged_ReturnsHTTPError(t *testing.T) {
@@ -398,7 +387,7 @@ func TestVerifyConfigurationsChanged_ReturnsHTTPError(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 	beelzebubCloud.PollingInterval = 50 * time.Millisecond
 
@@ -435,7 +424,7 @@ func TestVerifyConfigurationsChanged_StopsOnContextAtTopOfLoop(t *testing.T) {
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
 	beelzebubCloud.client = client
 
 	// Stop before verifyConfigurationsChanged starts.
@@ -460,7 +449,7 @@ func TestMapToEventDTO_WithHeaders(t *testing.T) {
 		DateTime: "2025-05-01T16:18:13Z",
 		Headers:  `[Key: Content-Type, values: application/json]`,
 	}
-	beelzebubCloud := InitBeelzebubCloud("localhost:8081", "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud("localhost:8081", "sdjdnklfjndslkjanfk", nil, 0, nil)
 	eventDTO, err := beelzebubCloud.mapToEventDTO(event)
 
 	assert.Nil(t, err)
@@ -493,7 +482,7 @@ func TestMapToEventDTO(t *testing.T) {
 		SourcePort:      "12345",
 		TLSServerName:   "beelzebub-honeypot.com",
 	}
-	beelzebubCloud := InitBeelzebubCloud("localhost:8081", "sdjdnklfjndslkjanfk", false)
+	beelzebubCloud := InitBeelzebubCloud("localhost:8081", "sdjdnklfjndslkjanfk", nil, 0, nil)
 	eventDTO, err := beelzebubCloud.mapToEventDTO(event)
 	assert.Nil(t, err)
 
@@ -521,4 +510,25 @@ func TestMapToEventDTO(t *testing.T) {
 		SourcePort:      "12345",
 		TLSServerName:   "beelzebub-honeypot.com",
 	}, eventDTO)
+}
+
+func TestInitBeelzebubCloud_WithCustomClientAndInterval(t *testing.T) {
+	client := resty.New()
+	pollingInterval := 5 * time.Second
+
+	bc := InitBeelzebubCloud("http://localhost:9999", "test-token", nil, pollingInterval, client)
+	defer bc.Stop()
+
+	assert.Equal(t, pollingInterval, bc.PollingInterval)
+	assert.NotNil(t, bc.client)
+}
+
+func TestInitBeelzebubCloud_NilOnChange(t *testing.T) {
+	bc := InitBeelzebubCloud("http://localhost:9999", "test-token", nil, 0, nil)
+	defer bc.Stop()
+
+	assert.Equal(t, 15*time.Second, bc.PollingInterval)
+	assert.NotNil(t, bc.client)
+	assert.Equal(t, "http://localhost:9999", bc.URI)
+	assert.Equal(t, "test-token", bc.AuthToken)
 }
