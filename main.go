@@ -4,6 +4,11 @@ import (
 	"os"
 
 	"github.com/beelzebub-labs/beelzebub/v3/cli"
+	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/HTTP"
+	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/MCP"
+	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/SSH"
+	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/TCP"
+	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/TELNET"
 	_ "github.com/beelzebub-labs/beelzebub/v3/plugins"
 	log "github.com/sirupsen/logrus"
 )

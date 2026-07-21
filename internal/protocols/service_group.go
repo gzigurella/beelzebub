@@ -7,11 +7,6 @@ import (
 	"sync"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
-	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/HTTP"
-	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/MCP"
-	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/SSH"
-	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/TCP"
-	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/TELNET"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 	log "github.com/sirupsen/logrus"
 )
@@ -23,17 +18,7 @@ type ServiceGroup struct {
 }
 
 func NewServiceGroup(tracerStrategy tracer.Strategy) *ServiceGroup {
-	strategies := map[string]ServiceStrategy{
-		"ssh":    &SSH.SSHStrategy{},
-		"http":   &HTTP.HTTPStrategy{},
-		"tcp":    &TCP.TCPStrategy{},
-		"mcp":    &MCP.MCPStrategy{},
-		"telnet": &TELNET.TelnetStrategy{},
-	}
-	return NewServiceGroupWithStrategies(
-		InitProtocolManager(tracerStrategy, strategies["ssh"], strategies["http"], strategies["tcp"], strategies["mcp"], strategies["telnet"]),
-		strategies,
-	)
+	return NewServiceGroupFromRegistry(tracerStrategy)
 }
 
 func NewServiceGroupWithStrategies(pm *ProtocolManager, strategies map[string]ServiceStrategy) *ServiceGroup {
