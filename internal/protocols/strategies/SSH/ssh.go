@@ -207,7 +207,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			})
 			matched, err := regexp.MatchString(servConf.PasswordRegex, password)
 			if err != nil {
-				log.Errorf("error regex: %s, %s", servConf.PasswordRegex, err.Error())
+				log.Errorf("error matching password regex: %s", err.Error())
 				return false
 			}
 			return matched
