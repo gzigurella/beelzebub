@@ -120,7 +120,7 @@ func getResult(resultMap map[string]*ValidationResult, filename string) *Validat
 }
 
 func validateProtocol(svc BeelzebubServiceConfiguration) []ValidationIssue {
-	if slices.Contains(validProtocols, svc.Protocol) {
+	if slices.Contains(validProtocols, strings.ToLower(svc.Protocol)) {
 		return nil
 	}
 

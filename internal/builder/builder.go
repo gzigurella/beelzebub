@@ -246,7 +246,7 @@ func (b *Builder) Run() error {
 
 	for _, beelzebubServiceConfiguration := range b.beelzebubServicesConfiguration {
 		var strategy protocols.ServiceStrategy
-		switch beelzebubServiceConfiguration.Protocol {
+		switch strings.ToLower(beelzebubServiceConfiguration.Protocol) {
 		case "http":
 			strategy = hypertextTransferProtocolStrategy
 		case "ssh":
@@ -258,7 +258,8 @@ func (b *Builder) Run() error {
 		case "telnet":
 			strategy = telnetStrategy
 		default:
-			log.Fatalf("protocol %s not managed", beelzebubServiceConfiguration.Protocol)
+			log.Warnf("protocol %q not managed, skipping", beelzebubServiceConfiguration.Protocol)
+			continue
 		}
 
 		if err := b.protocolManager.InitService(beelzebubServiceConfiguration, strategy); err != nil {
