@@ -3,6 +3,8 @@ package builder
 import (
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -213,6 +215,26 @@ func TestBuilderReload(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestBuilderReload_WhenClosing(t *testing.T) {
+	b := NewBuilder()
+	b.closing.Store(true)
+
+	err := b.Reload([]parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:0"},
+	})
+	assert.NoError(t, err)
+}
+
+func TestBuilderReload_WithoutRun_ReturnsError(t *testing.T) {
+	b := NewBuilder()
+
+	err := b.Reload([]parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:0"},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "reload called before Run()")
+}
+
 func TestBuilderReload_RollbackOnFailure(t *testing.T) {
 	b := NewBuilder()
 	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
@@ -395,4 +417,62 @@ func TestBuilderReload_EndToEnd_WithReloadCh(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("consumer goroutine did not exit after channel closed")
 	}
+}
+
+func TestBuilderRun_CloudError_EmptyConfig(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]"))
+	}))
+	defer ts.Close()
+
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{
+		Core: struct {
+			Logging        parser.Logging        `yaml:"logging"`
+			Tracings       parser.Tracings       `yaml:"tracings"`
+			Prometheus     parser.Prometheus     `yaml:"prometheus"`
+			BeelzebubCloud parser.BeelzebubCloud `yaml:"beelzebub-cloud"`
+		}{
+			BeelzebubCloud: parser.BeelzebubCloud{
+				Enabled: true,
+				URI:     ts.URL,
+				AuthToken: "test-token",
+			},
+		},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	err := b.Run()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no honeypots configuration found")
+
+	b.Close()
+}
+
+func TestBuilderClose_WithPrometheus(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{
+		Core: struct {
+			Logging        parser.Logging        `yaml:"logging"`
+			Tracings       parser.Tracings       `yaml:"tracings"`
+			Prometheus     parser.Prometheus     `yaml:"prometheus"`
+			BeelzebubCloud parser.BeelzebubCloud `yaml:"beelzebub-cloud"`
+		}{
+			Prometheus: parser.Prometheus{
+				Path: "/metrics",
+				Port: "127.0.0.1:0",
+			},
+		},
+	}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	err := b.Run()
+	require.NoError(t, err)
+	require.NotNil(t, b.prometheusServer)
+
+	err = b.Close()
+	require.NoError(t, err)
+	require.Nil(t, b.prometheusServer)
 }

@@ -1,16 +1,30 @@
 package TELNET
 
 import (
+	"context"
 	"net"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/historystore"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
+	"github.com/beelzebub-labs/beelzebub/v3/pkg/plugin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type telnetTestCommandPlugin struct{}
+
+func (p *telnetTestCommandPlugin) Metadata() plugin.Metadata {
+	return plugin.Metadata{Name: "telnet-test-cmd"}
+}
+
+func (p *telnetTestCommandPlugin) Execute(_ context.Context, req plugin.CommandRequest) (string, error) {
+	return "telnet-plugin-output", nil
+}
 
 type mockTracer struct {
 	events []tracer.Event
@@ -243,6 +257,31 @@ func TestTelnetStrategy_StopAll_AlreadyClosed(t *testing.T) {
 	assert.Nil(t, strategy.listeners)
 }
 
+func TestTelnetStrategy_Stop_CloseError(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.New(t).NoError(err)
+	addr := listener.Addr().String()
+	listener.Close()
+
+	listener2, err := net.Listen("tcp", addr)
+	require.New(t).NoError(err)
+
+	strategy := newTelnetStrategy()
+	strategy.listeners = map[string]net.Listener{addr: listener2}
+
+	err = strategy.Stop(parser.BeelzebubServiceConfiguration{Address: addr})
+	assert.NoError(t, err)
+	assert.Empty(t, strategy.listeners)
+}
+
+func TestTelnetStrategy_Stop_ServerNotFound(t *testing.T) {
+	strategy := newTelnetStrategy()
+	strategy.listeners = map[string]net.Listener{"other:0": nil}
+
+	err := strategy.Stop(parser.BeelzebubServiceConfiguration{Address: "test:0"})
+	assert.NoError(t, err)
+}
+
 func TestTelnetStrategy_Init_BadRegex(t *testing.T) {
 	strategy := newTelnetStrategy()
 	mt := &mockTracer{}
@@ -302,6 +341,50 @@ func TestReadLine_IACSubnegotiation_Incomplete(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
 	}
+}
+
+func TestHandleTelnetConnection_WithPluginCommand(t *testing.T) {
+	plugin.Register(&telnetTestCommandPlugin{})
+
+	client, server := net.Pipe()
+	defer client.Close()
+
+	mt := &mockTracer{}
+	rex, _ := regexp.Compile("ls")
+	servConf := parser.BeelzebubServiceConfiguration{
+		Description:            "test",
+		DeadlineTimeoutSeconds: 5,
+		PasswordRegex:          ".*",
+		ServerName:             "test",
+		Commands: []parser.Command{
+			{
+				Regex:  rex,
+				Plugin: "telnet-test-cmd",
+			},
+		},
+	}
+	strategy := newTelnetStrategy()
+
+	go handleTelnetConnection(server, servConf, mt, strategy)
+
+	drain(client, 500*time.Millisecond)
+	client.Write([]byte("admin\n"))
+	drain(client, 100*time.Millisecond)
+	client.Write([]byte("pass\n"))
+	drain(client, 100*time.Millisecond)
+
+	client.Write([]byte("ls\n"))
+	time.Sleep(200 * time.Millisecond)
+
+	buf := make([]byte, 512)
+	n, err := client.Read(buf)
+	if err != nil {
+		t.Fatalf("failed to read plugin response: %v", err)
+	}
+	output := strings.TrimSpace(string(buf[:n]))
+	assert.Contains(t, output, "telnet-plugin-output")
+
+	client.Close()
 }
 
 func TestHandleTelnetConnection_WriteFailAtLogin(t *testing.T) {

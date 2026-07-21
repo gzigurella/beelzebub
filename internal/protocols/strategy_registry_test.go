@@ -40,3 +40,11 @@ func TestNewServiceGroup_delegatesToRegistry(t *testing.T) {
 	sg := NewServiceGroup(func(event tracer.Event) {})
 	assert.NotNil(t, sg)
 }
+
+func TestRegisterStrategy_OverwriteWarning(t *testing.T) {
+	RegisterStrategy("overwrite-test", func() ServiceStrategy { return &mockStrategy{} })
+	RegisterStrategy("overwrite-test", func() ServiceStrategy { return &mockStrategy{} })
+
+	names := RegisteredStrategies()
+	assert.Contains(t, names, "overwrite-test")
+}

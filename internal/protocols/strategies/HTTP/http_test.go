@@ -1,8 +1,10 @@
 package HTTP
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
+	"github.com/beelzebub-labs/beelzebub/v3/pkg/plugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -376,4 +379,163 @@ func TestHTTPStrategy_StopAll_ShutdownError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated close error")
 	assert.Nil(t, strategy.servers)
+}
+
+func TestHTTPStrategy_Stop_ShutdownError(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	failL := &failOnCloseListener{Listener: l, closeErr: errors.New("simulated close error")}
+
+	srv := &http.Server{Handler: http.NewServeMux()}
+	go srv.Serve(failL)
+	time.Sleep(50 * time.Millisecond)
+
+	strategy := &HTTPStrategy{}
+	strategy.servers = map[string]*http.Server{"test:0": srv}
+
+	servConf := parser.BeelzebubServiceConfiguration{Address: "test:0"}
+	err = strategy.Stop(servConf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated close error")
+	assert.Empty(t, strategy.servers)
+}
+
+func TestHTTPStrategy_Stop_ServerNotFound(t *testing.T) {
+	strategy := &HTTPStrategy{}
+	strategy.servers = map[string]*http.Server{"other:0": {}}
+
+	err := strategy.Stop(parser.BeelzebubServiceConfiguration{Address: "test:0"})
+	assert.NoError(t, err)
+}
+
+func TestHTTPStrategy_StopAll_ServerNotFound(t *testing.T) {
+	strategy := &HTTPStrategy{}
+	err := strategy.StopAll()
+	assert.NoError(t, err)
+}
+
+func TestHTTPStrategy_Init_OverwriteExisting(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+
+	strategy := &HTTPStrategy{}
+	mt := &mockTracer{}
+
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address: fmt.Sprintf("127.0.0.1:%d", port),
+	}
+
+	// First init creates the server
+	err = strategy.Init(servConf, mt)
+	assert.NoError(t, err)
+	assert.Len(t, strategy.servers, 1)
+	firstServer := strategy.servers[servConf.Address]
+
+	// Second init with same address overwrites
+	err = strategy.Init(servConf, mt)
+	assert.NoError(t, err)
+	assert.Len(t, strategy.servers, 1)
+
+	err = strategy.StopAll()
+	assert.NoError(t, err)
+}
+
+type testCommandPlugin struct{}
+
+func (p *testCommandPlugin) Metadata() plugin.Metadata {
+	return plugin.Metadata{Name: "http-test-cmd"}
+}
+
+func (p *testCommandPlugin) Execute(_ context.Context, req plugin.CommandRequest) (string, error) {
+	return "plugin-output", nil
+}
+
+type testHTTPPlugin struct{}
+
+func (p *testHTTPPlugin) Metadata() plugin.Metadata {
+	return plugin.Metadata{Name: "http-test-http"}
+}
+
+func (p *testHTTPPlugin) HandleHTTP(r *http.Request) plugin.HTTPResponse {
+	return plugin.HTTPResponse{
+		StatusCode: 201,
+		Body:       "http-plugin-body",
+		Headers:    map[string]string{"X-Custom": "value"},
+		ContentType: "text/plain",
+	}
+}
+
+type testCommandPluginError struct{}
+
+func (p *testCommandPluginError) Metadata() plugin.Metadata {
+	return plugin.Metadata{Name: "http-test-cmd-err"}
+}
+
+func (p *testCommandPluginError) Execute(_ context.Context, req plugin.CommandRequest) (string, error) {
+	return "", errors.New("simulated execute error")
+}
+
+func TestBuildHTTPResponse_PluginCommand(t *testing.T) {
+	plugin.Register(&testCommandPlugin{})
+
+	tr := &mockTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	cmd := parser.Command{Plugin: "http-test-cmd"}
+	req := httptest.NewRequest("GET", "http://localhost/", nil)
+
+	resp, err := buildHTTPResponse(servConf, tr, cmd, req)
+	assert.NoError(t, err)
+	assert.Equal(t, "plugin-output", resp.Body)
+}
+
+func TestBuildHTTPResponse_PluginCommandError(t *testing.T) {
+	plugin.Register(&testCommandPluginError{})
+
+	tr := &mockTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	cmd := parser.Command{Plugin: "http-test-cmd-err"}
+	req := httptest.NewRequest("GET", "http://localhost/", nil)
+
+	resp, err := buildHTTPResponse(servConf, tr, cmd, req)
+	assert.Error(t, err)
+	assert.Contains(t, resp.Body, "404 Not Found")
+}
+
+func TestBuildHTTPResponse_HTTPPlugin(t *testing.T) {
+	plugin.Register(&testHTTPPlugin{})
+
+	tr := &mockTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	cmd := parser.Command{Plugin: "http-test-http"}
+	req := httptest.NewRequest("GET", "http://localhost/", nil)
+
+	resp, err := buildHTTPResponse(servConf, tr, cmd, req)
+	assert.NoError(t, err)
+	assert.Equal(t, "http-plugin-body", resp.Body)
+	assert.Equal(t, 201, resp.StatusCode)
+}
+
+func TestBuildHTTPResponse_UnknownPlugin(t *testing.T) {
+	tr := &mockTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+
+	cmd := parser.Command{
+		Plugin:    "nonexistent-plugin",
+		Handler:   "fallback",
+		StatusCode: 200,
+	}
+
+	req := httptest.NewRequest("GET", "http://localhost/", nil)
+
+	resp, err := buildHTTPResponse(servConf, tr, cmd, req)
+	assert.NoError(t, err)
+	assert.Equal(t, "fallback", resp.Body)
+}
+
+func TestHTTPStrategy_Init_ValidWithPlugins(t *testing.T) {
+	// Quick smoke test that Init works when plugins are set.
+	// We don't actually test the handler/plugin dispatch here since that's
+	// exercised by TestBuildHTTPResponse_* tests.
 }

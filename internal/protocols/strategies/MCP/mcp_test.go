@@ -194,3 +194,34 @@ func TestMCPStrategy_StopAll_ShutdownError(t *testing.T) {
 	assert.Contains(t, err.Error(), "simulated close error")
 	assert.Nil(t, strategy.servers)
 }
+
+func TestMCPStrategy_Stop_ShutdownError(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	failL := &failOnCloseListener{Listener: l, closeErr: errors.New("simulated close error")}
+
+	rawSrv := &http.Server{Handler: http.NewServeMux()}
+	go rawSrv.Serve(failL)
+	time.Sleep(50 * time.Millisecond)
+
+	mcpServer := server.NewMCPServer("test", "1.0.0")
+	httpServer := server.NewStreamableHTTPServer(mcpServer,
+		server.WithStreamableHTTPServer(rawSrv),
+	)
+
+	strategy := &MCPStrategy{}
+	strategy.servers = map[string]*server.StreamableHTTPServer{"test:0": httpServer}
+
+	err = strategy.Stop(parser.BeelzebubServiceConfiguration{Address: "test:0"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated close error")
+	assert.Empty(t, strategy.servers)
+}
+
+func TestMCPStrategy_Stop_ServerNotFound(t *testing.T) {
+	strategy := &MCPStrategy{}
+	strategy.servers = map[string]*server.StreamableHTTPServer{"other:0": nil}
+
+	err := strategy.Stop(parser.BeelzebubServiceConfiguration{Address: "test:0"})
+	assert.NoError(t, err)
+}

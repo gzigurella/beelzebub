@@ -148,6 +148,14 @@ func (f *failOnCloseListener) Close() error {
 	return f.closeErr
 }
 
+func TestSSHStrategy_Stop_ServerNotFound(t *testing.T) {
+	strategy := &SSHStrategy{}
+	strategy.servers = map[string]*ssh.Server{"other:0": nil}
+
+	err := strategy.Stop(parser.BeelzebubServiceConfiguration{Address: "test:0"})
+	assert.NoError(t, err)
+}
+
 func TestSSHStrategy_StopAll_ShutdownError(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

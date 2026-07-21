@@ -174,3 +174,70 @@ func TestServiceGroup_configChanged_sameHash(t *testing.T) {
 	b := parser.BeelzebubServiceConfiguration{Protocol: "ssh", Address: ":2222"}
 	assert.False(t, configChanged(a, b))
 }
+
+func TestServiceGroup_Reload_RollbackWithStopError(t *testing.T) {
+	ssh := &mockStrategy{}
+	good := &mockStrategy{}
+	bad := &mockStrategy{initErr: errors.New("start failure")}
+	sg := NewServiceGroupWithStrategies(
+		InitProtocolManager(func(tracer.Event) {}, ssh, good, bad),
+		map[string]ServiceStrategy{"ssh": ssh, "good": good, "bad": bad},
+	)
+
+	err := sg.InitServices([]parser.BeelzebubServiceConfiguration{
+		{Protocol: "ssh", Address: ":2222"},
+	})
+	require.NoError(t, err)
+
+	// Reload: remove ssh, add good (succeeds) and bad (fails Init).
+	// good.stopErr triggers the rollback StopService error path.
+	good.stopErr = errors.New("stop failure during rollback")
+	err = sg.Reload(
+		[]parser.BeelzebubServiceConfiguration{
+			{Protocol: "ssh", Address: ":2222"},
+		},
+		[]parser.BeelzebubServiceConfiguration{
+			{Protocol: "good", Address: ":8080"},
+			{Protocol: "bad", Address: ":9999"},
+		},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "reload failed, rolled back")
+}
+
+func TestStrategyForProtocol_CaseInsensitive(t *testing.T) {
+	m := &mockStrategy{}
+	sg := NewServiceGroupWithStrategies(
+		InitProtocolManager(func(tracer.Event) {}, m),
+		map[string]ServiceStrategy{"ssh": m},
+	)
+
+	strategy := sg.strategyForProtocol("SSH")
+	assert.NotNil(t, strategy)
+
+	strategy = sg.strategyForProtocol("Ssh")
+	assert.NotNil(t, strategy)
+
+	strategy = sg.strategyForProtocol("ssh")
+	assert.NotNil(t, strategy)
+}
+
+func TestStrategyForProtocol_ReturnsNilForUnknown(t *testing.T) {
+	sg := NewServiceGroupWithStrategies(
+		InitProtocolManager(func(tracer.Event) {}),
+		map[string]ServiceStrategy{"ssh": &mockStrategy{}},
+	)
+
+	strategy := sg.strategyForProtocol("nonexistent")
+	assert.Nil(t, strategy)
+}
+
+func TestStrategyForProtocol_NilMap(t *testing.T) {
+	sg := NewServiceGroupWithStrategies(
+		InitProtocolManager(func(tracer.Event) {}),
+		nil,
+	)
+
+	strategy := sg.strategyForProtocol("ssh")
+	assert.Nil(t, strategy)
+}
