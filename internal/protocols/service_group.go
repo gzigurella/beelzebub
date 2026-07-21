@@ -23,9 +23,16 @@ type ServiceGroup struct {
 }
 
 func NewServiceGroup(tracerStrategy tracer.Strategy) *ServiceGroup {
+	strategies := map[string]ServiceStrategy{
+		"ssh":    &SSH.SSHStrategy{},
+		"http":   &HTTP.HTTPStrategy{},
+		"tcp":    &TCP.TCPStrategy{},
+		"mcp":    &MCP.MCPStrategy{},
+		"telnet": &TELNET.TelnetStrategy{},
+	}
 	return NewServiceGroupWithStrategies(
-		InitProtocolManager(tracerStrategy, newDefaultStrategies()...),
-		defaultStrategyMap(),
+		InitProtocolManager(tracerStrategy, strategies["ssh"], strategies["http"], strategies["tcp"], strategies["mcp"], strategies["telnet"]),
+		strategies,
 	)
 }
 
@@ -33,26 +40,6 @@ func NewServiceGroupWithStrategies(pm *ProtocolManager, strategies map[string]Se
 	return &ServiceGroup{
 		pm:         pm,
 		strategies: strategies,
-	}
-}
-
-func newDefaultStrategies() []ServiceStrategy {
-	return []ServiceStrategy{
-		&SSH.SSHStrategy{},
-		&HTTP.HTTPStrategy{},
-		&TCP.TCPStrategy{},
-		&MCP.MCPStrategy{},
-		&TELNET.TelnetStrategy{},
-	}
-}
-
-func defaultStrategyMap() map[string]ServiceStrategy {
-	return map[string]ServiceStrategy{
-		"ssh":    &SSH.SSHStrategy{},
-		"http":   &HTTP.HTTPStrategy{},
-		"tcp":    &TCP.TCPStrategy{},
-		"mcp":    &MCP.MCPStrategy{},
-		"telnet": &TELNET.TelnetStrategy{},
 	}
 }
 
