@@ -81,10 +81,6 @@ func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfi
 		}
 	}()
 
-	log.WithFields(log.Fields{
-		"port":     servConf.Address,
-		"commands": len(servConf.Commands),
-	}).Infof("GetInstance service %s", servConf.Protocol)
 	return nil
 }
 

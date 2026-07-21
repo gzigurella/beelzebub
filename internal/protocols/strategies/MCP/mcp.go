@@ -105,10 +105,6 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		}
 	}()
 
-	log.WithFields(log.Fields{
-		"port":        servConf.Address,
-		"description": servConf.Description,
-	}).Infof("Init service %s", servConf.Protocol)
 	return nil
 }
 

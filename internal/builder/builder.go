@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -263,8 +264,14 @@ func (b *Builder) Run() error {
 		if err := b.protocolManager.InitService(beelzebubServiceConfiguration, strategy); err != nil {
 			return fmt.Errorf("error during init protocol: %s, %s", beelzebubServiceConfiguration.Protocol, err.Error())
 		}
+
+		log.Infof("%s %s ready (%d commands)",
+			strings.ToUpper(beelzebubServiceConfiguration.Protocol),
+			beelzebubServiceConfiguration.Address,
+			len(beelzebubServiceConfiguration.Commands))
 	}
 
+	log.Infof("Started %d service(s)", len(b.beelzebubServicesConfiguration))
 	return nil
 }
 
@@ -277,7 +284,7 @@ func (b *Builder) Reload(newConfigs []parser.BeelzebubServiceConfiguration) erro
 		return nil
 	}
 
-	log.Info("Hot-reloading configurations...")
+	log.Infof("Hot-reload: updating %d services", len(newConfigs))
 
 	oldConfigs := b.beelzebubServicesConfiguration
 

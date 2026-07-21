@@ -220,11 +220,6 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			}
 		}
 	}()
-
-	log.WithFields(log.Fields{
-		"port":     servConf.Address,
-		"commands": len(servConf.Commands),
-	}).Infof("GetInstance service %s", servConf.Protocol)
 	return nil
 }
 

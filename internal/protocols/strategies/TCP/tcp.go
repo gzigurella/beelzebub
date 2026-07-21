@@ -66,11 +66,6 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		}
 	}()
 
-	log.WithFields(log.Fields{
-		"port":     servConf.Address,
-		"banner":   servConf.Banner,
-		"commands": len(servConf.Commands),
-	}).Infof("Init service %s", servConf.Protocol)
 	return nil
 }
 

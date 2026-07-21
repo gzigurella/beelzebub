@@ -85,10 +85,6 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		}
 	}()
 
-	log.WithFields(log.Fields{
-		"port":     servConf.Address,
-		"commands": len(servConf.Commands),
-	}).Infof("Init service: %s", servConf.Description)
 	return nil
 }
 
