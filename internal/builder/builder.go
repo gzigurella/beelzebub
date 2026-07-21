@@ -92,12 +92,14 @@ func (b *Builder) buildRabbitMQ(rabbitMQURI string) error {
 }
 
 func (b *Builder) Close() error {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+
 	if !b.closing.CompareAndSwap(false, true) {
 		return nil
 	}
 
-	// Stop the reload consumer goroutine. Reload() will re-create
-	// reloadCh + consumer in Run() if cloud is still enabled.
+	// Stop the reload consumer goroutine.
 	if b.reloadCh != nil {
 		close(b.reloadCh)
 		b.reloadCh = nil
