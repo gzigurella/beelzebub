@@ -336,6 +336,100 @@ func TestHandleTCPConnection_WithPluginCommand(t *testing.T) {
 	}
 }
 
+func TestHandleTCPConnection_UnmatchedCommand(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	mt := &mockTracer{}
+	rex, _ := regexp.Compile("^ping$")
+	servConf := parser.BeelzebubServiceConfiguration{
+		Description:            "test",
+		DeadlineTimeoutSeconds: 5,
+		Commands: []parser.Command{
+			{Regex: rex, Handler: "pong", Name: "ping-command"},
+		},
+	}
+	strategy := newStrategyWithSessions()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleTCPConnection(server, servConf, mt, strategy)
+	}()
+
+	client.Write([]byte("unknown\n"))
+	client.Close()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for connection handler")
+	}
+
+	// Should have: session start, unmatched interaction, session end
+	assert.GreaterOrEqual(t, len(mt.events), 3)
+	foundUnmatched := false
+	foundEnd := false
+	for _, e := range mt.events {
+		if e.Handler == "not_found" {
+			foundUnmatched = true
+		}
+		if e.Status == tracer.End.String() {
+			foundEnd = true
+		}
+	}
+	assert.True(t, foundUnmatched, "should have unmatched interaction event")
+	assert.True(t, foundEnd, "should have end session event")
+}
+
+func TestHandleTCPConnection_WriteFailureAfterMatch(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	mt := &mockTracer{}
+	rex, _ := regexp.Compile("^ping$")
+	servConf := parser.BeelzebubServiceConfiguration{
+		Description:            "test",
+		DeadlineTimeoutSeconds: 5,
+		Commands: []parser.Command{
+			{Regex: rex, Handler: "pong", Name: "ping-command"},
+		},
+	}
+	strategy := newStrategyWithSessions()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleTCPConnection(server, servConf, mt, strategy)
+	}()
+
+	// Send a matching command, read response
+	client.Write([]byte("ping\n"))
+	buf := make([]byte, 1024)
+	_, err := client.Read(buf)
+	require.NoError(t, err)
+
+	// Now break the read side so the next write attempt fails
+	// The handler will try to write the response and break out of the loop
+	client.Close()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for handler to exit on write failure")
+	}
+
+	// Should have session end event
+	foundEnd := false
+	for _, e := range mt.events {
+		if e.Status == tracer.End.String() {
+			foundEnd = true
+			break
+		}
+	}
+	assert.True(t, foundEnd)
+}
+
 func TestHandleTCPConnection_Deadline(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()

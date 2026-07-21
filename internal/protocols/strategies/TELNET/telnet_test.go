@@ -51,6 +51,24 @@ func drain(conn net.Conn, timeout time.Duration) {
 	conn.SetReadDeadline(time.Time{})
 }
 
+func TestNegotiateTelnet_ReadTimeout(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		negotiateTelnet(server)
+	}()
+
+	// Don't send anything — let the 100ms deadline expire
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for negotiateTelnet")
+	}
+}
+
 func TestNegotiateTelnet(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
@@ -282,6 +300,27 @@ func TestTelnetStrategy_Stop_ServerNotFound(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestTelnetStrategy_Init_OverwriteExisting(t *testing.T) {
+	strategy := newTelnetStrategy()
+	mt := &mockTracer{}
+
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:       "127.0.0.1:0",
+		PasswordRegex: ".*",
+	}
+
+	err := strategy.Init(servConf, mt)
+	assert.NoError(t, err)
+	assert.Len(t, strategy.listeners, 1)
+
+	// Second Init with same address should close old listener and create new one
+	err = strategy.Init(servConf, mt)
+	assert.NoError(t, err)
+	assert.Len(t, strategy.listeners, 1)
+
+	strategy.StopAll()
+}
+
 func TestTelnetStrategy_Init_BadRegex(t *testing.T) {
 	strategy := newTelnetStrategy()
 	mt := &mockTracer{}
@@ -340,6 +379,101 @@ func TestReadLine_IACSubnegotiation_Incomplete(t *testing.T) {
 		assert.Equal(t, "x", s)
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
+	}
+}
+
+func TestHandleTelnetConnection_UnmatchedCommand(t *testing.T) {
+	client, server := net.Pipe()
+	mt := &mockTracer{}
+	rex, _ := regexp.Compile("^ls$")
+	servConf := parser.BeelzebubServiceConfiguration{
+		Description:            "test",
+		DeadlineTimeoutSeconds: 5,
+		PasswordRegex:          ".*",
+		ServerName:             "test",
+		Commands: []parser.Command{
+			{Regex: rex, Handler: "ok"},
+		},
+	}
+	strategy := newTelnetStrategy()
+
+	done := make(chan struct{})
+	go func() {
+		handleTelnetConnection(server, servConf, mt, strategy)
+		close(done)
+	}()
+
+	drain(client, 500*time.Millisecond)
+	client.Write([]byte("admin\n"))
+	drain(client, 100*time.Millisecond)
+	client.Write([]byte("pass\n"))
+	drain(client, 100*time.Millisecond)
+
+	// Send unmatched command
+	client.Write([]byte("unknown\n"))
+	time.Sleep(200 * time.Millisecond)
+
+	buf := make([]byte, 512)
+	n, _ := client.Read(buf)
+	assert.Contains(t, string(buf[:n]), "command not found")
+
+	client.Close()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for handler")
+	}
+
+	// Verify session end trace (safe to read after handler exited)
+	foundEnd := false
+	for _, e := range mt.events {
+		if e.Msg == "End TELNET Session" {
+			foundEnd = true
+			break
+		}
+	}
+	assert.True(t, foundEnd, "should have end session trace event")
+}
+
+func TestHandleTelnetConnection_PromptWriteFailure(t *testing.T) {
+	client, server := net.Pipe()
+	mt := &mockTracer{}
+	rex, _ := regexp.Compile("^ls$")
+	servConf := parser.BeelzebubServiceConfiguration{
+		Description:            "test",
+		DeadlineTimeoutSeconds: 5,
+		PasswordRegex:          ".*",
+		ServerName:             "test",
+		Commands: []parser.Command{
+			{Regex: rex, Handler: "ok"},
+		},
+	}
+	strategy := newTelnetStrategy()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleTelnetConnection(server, servConf, mt, strategy)
+	}()
+
+	// Drain the initial login prompts
+	drain(client, 500*time.Millisecond)
+
+	// Send username
+	client.Write([]byte("admin\n"))
+	drain(client, 100*time.Millisecond)
+	// Send password — after this, the handler enters the command loop
+	client.Write([]byte("pass\n"))
+	time.Sleep(200 * time.Millisecond)
+
+	// Close the write side to make the next prompt write fail
+	client.Close()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for handler to exit on write failure")
 	}
 }
 

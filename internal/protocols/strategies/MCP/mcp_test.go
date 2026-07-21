@@ -314,7 +314,36 @@ func TestMCPStrategy_handleDeploy_Success(t *testing.T) {
 
 	// Verify trace event was emitted
 	assert.Len(t, mt.events, 1)
-	assert.Contains(t, mt.events[0].Msg, "Deployed")
+	assert.Contains(t, mt.events[0].Msg, "Deployed honeypot via MCP")
+	assert.Equal(t, tracer.Stateless.String(), mt.events[0].Status)
+}
+
+func TestMCPStrategy_handleDeploy_InvalidArgumentsType(t *testing.T) {
+	strategy := &MCPStrategy{}
+	mt := &mockTracer{}
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = deployDeployToolName
+	req.Params.Arguments = "not-a-map"
+
+	ctx := context.WithValue(context.Background(), remoteAddrCtxKey{}, "10.0.0.1:12345")
+	result, err := strategy.handleDeploy(ctx, req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	assert.NoError(t, err)
+	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "invalid arguments format")
+}
+
+func TestMCPStrategy_handleDeploy_ConfigYAMLNotString(t *testing.T) {
+	strategy := &MCPStrategy{}
+	mt := &mockTracer{}
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = deployDeployToolName
+	req.Params.Arguments = map[string]interface{}{"config_yaml": 12345}
+
+	ctx := context.WithValue(context.Background(), remoteAddrCtxKey{}, "10.0.0.1:12345")
+	result, err := strategy.handleDeploy(ctx, req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	assert.NoError(t, err)
+	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "config_yaml must be a string")
 }
 
 func TestMCPStrategy_SetDeployFn(t *testing.T) {

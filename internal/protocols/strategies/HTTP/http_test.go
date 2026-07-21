@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -532,6 +533,46 @@ func TestBuildHTTPResponse_UnknownPlugin(t *testing.T) {
 	resp, err := buildHTTPResponse(servConf, tr, cmd, req)
 	assert.NoError(t, err)
 	assert.Equal(t, "fallback", resp.Body)
+}
+
+type errReader struct{}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	return 0, errors.New("simulated read error")
+}
+
+func TestBuildHTTPResponse_BodyReadError(t *testing.T) {
+	tr := &mockTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	cmd := parser.Command{Handler: "fallback-body", StatusCode: 200}
+	req := httptest.NewRequest("POST", "http://localhost/", io.NopCloser(&errReader{}))
+
+	resp, err := buildHTTPResponse(servConf, tr, cmd, req)
+	assert.NoError(t, err)
+	assert.Equal(t, "fallback-body", resp.Body)
+}
+
+func TestRealClientAddr_XFFEmptyParts(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "8.8.8.8, , 10.0.0.1")
+
+	host, port := realClientAddr(req, mustCIDRs(t, "10.0.0.0/8"))
+	assert.Equal(t, "8.8.8.8", host)
+	assert.Equal(t, "", port)
+}
+
+func TestRealClientAddr_XFFAllTrustedFallbackToXRI(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	// XFF entries are all trusted
+	req.Header.Set("X-Forwarded-For", "10.0.0.2, 10.0.0.1")
+	// XRI is also trusted
+	req.Header.Set("X-Real-Ip", "10.0.0.3")
+
+	host, port := realClientAddr(req, mustCIDRs(t, "10.0.0.0/8"))
+	assert.Equal(t, "10.0.0.1", host)
+	assert.Equal(t, "12345", port)
 }
 
 func TestHTTPStrategy_Init_ValidWithPlugins(t *testing.T) {

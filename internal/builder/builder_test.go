@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
+	"github.com/beelzebub-labs/beelzebub/v3/internal/plugins"
 	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/HTTP"
 	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/MCP"
 	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/SSH"
@@ -263,7 +264,7 @@ func TestBuilderReload_RollbackOnFailure(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestBuilderClose_WithCloud(t *testing.T) {
+func TestBuilderClose_Basic(t *testing.T) {
 	b := NewBuilder()
 	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
 	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
@@ -275,7 +276,28 @@ func TestBuilderClose_WithCloud(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(50 * time.Millisecond)
 
-	// Close should succeed even without beelzebubCloud set
+	err = b.Close()
+	require.NoError(t, err)
+}
+
+func TestBuilderClose_WithBeelzebubCloud(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:0"},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+	// Set up a cloud instance to cover the Stop() path in Close()
+	b.beelzebubCloud = plugins.InitBeelzebubCloud("http://localhost:9999", "test-token", nil, 0, nil)
+
+	err := b.Run()
+	require.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	// Close should stop the cloud instance
+	err = b.Close()
+	require.NoError(t, err)
+	// Second call should be a no-op
 	err = b.Close()
 	require.NoError(t, err)
 }
@@ -550,6 +572,34 @@ func TestBuilderDeployService_Closing(t *testing.T) {
 	err := b.DeployService(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "builder is closing")
+}
+
+func TestBuilderDeployService_InitFailure(t *testing.T) {
+	// Occupy a port so the deploy's Init fails
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	defer l.Close()
+
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	require.NoError(t, b.Run())
+	time.Sleep(50 * time.Millisecond)
+
+	// Use TCP protocol because Init is synchronous (net.Listen inside)
+	// which returns the bind error immediately (unlike HTTP which is async)
+	cfg := parser.BeelzebubServiceConfiguration{
+		Protocol: "tcp",
+		Address:  addr,
+	}
+	err = b.DeployService(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to deploy")
+
+	b.Close()
 }
 
 func TestBuilderDeployService_PreservesExistingConfigs(t *testing.T) {
