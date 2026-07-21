@@ -199,20 +199,26 @@ func (b *Builder) Run() error {
 	if b.beelzebubCoreConfigurations.Core.BeelzebubCloud.Enabled {
 		conf := b.beelzebubCoreConfigurations.Core.BeelzebubCloud
 
+		b.reloadMu.Lock()
 		if b.reloadCh == nil {
 			b.reloadCh = make(chan []parser.BeelzebubServiceConfiguration, 1)
+			reloadCh := b.reloadCh
 
 			go func() {
-				for cfg := range b.reloadCh {
+				for cfg := range reloadCh {
 					if err := b.Reload(cfg); err != nil {
 						log.Errorf("hot-reload failed: %s", err.Error())
 					}
 				}
 			}()
 		}
+		b.reloadMu.Unlock()
 
 		cloud := plugins.InitBeelzebubCloud(conf.URI, conf.AuthToken, func(newConfigs []parser.BeelzebubServiceConfiguration, hash string) {
-			if b.closing.Load() {
+			b.reloadMu.Lock()
+			defer b.reloadMu.Unlock()
+
+			if b.reloadCh == nil {
 				return
 			}
 			select {
