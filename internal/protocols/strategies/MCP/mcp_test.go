@@ -217,7 +217,8 @@ func TestMCPStrategy_Stop_ShutdownError(t *testing.T) {
 	err = strategy.Stop(parser.BeelzebubServiceConfiguration{Address: "test:0"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated close error")
-	assert.Empty(t, strategy.servers)
+	// On error, Stop returns immediately without deleting from map
+	assert.Len(t, strategy.servers, 1)
 }
 
 func TestMCPStrategy_Stop_ServerNotFound(t *testing.T) {
@@ -235,8 +236,8 @@ func TestMCPStrategy_handleDeploy_MissingConfig(t *testing.T) {
 	req := mcp.CallToolRequest{}
 	req.Params.Name = deployDeployToolName
 	req.Params.Arguments = map[string]interface{}{}
-
-	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	ctx := context.WithValue(context.Background(), remoteAddrCtxKey{}, "10.0.0.1:12345")
+	result, err := strategy.handleDeploy(ctx, req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
 	assert.NoError(t, err)
 	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "missing required parameter")
 }
@@ -248,8 +249,9 @@ func TestMCPStrategy_handleDeploy_InvalidYAML(t *testing.T) {
 	req := mcp.CallToolRequest{}
 	req.Params.Name = deployDeployToolName
 	req.Params.Arguments = map[string]interface{}{"config_yaml": "{{ invalid yaml }"}
+	ctx := context.WithValue(context.Background(), remoteAddrCtxKey{}, "10.0.0.1:12345")
 
-	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	result, err := strategy.handleDeploy(ctx, req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
 	assert.NoError(t, err)
 	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "invalid YAML")
 }
@@ -261,8 +263,9 @@ func TestMCPStrategy_handleDeploy_NoProtocol(t *testing.T) {
 	req := mcp.CallToolRequest{}
 	req.Params.Name = deployDeployToolName
 	req.Params.Arguments = map[string]interface{}{"config_yaml": "address: \":9999\""}
+	ctx := context.WithValue(context.Background(), remoteAddrCtxKey{}, "10.0.0.1:12345")
 
-	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	result, err := strategy.handleDeploy(ctx, req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
 	assert.NoError(t, err)
 	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "'protocol' field")
 }
@@ -280,7 +283,8 @@ func TestMCPStrategy_handleDeploy_DeployFnError(t *testing.T) {
 	req.Params.Name = deployDeployToolName
 	req.Params.Arguments = map[string]interface{}{"config_yaml": "protocol: ssh\naddress: \":2222\""}
 
-	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	ctx := context.WithValue(context.Background(), remoteAddrCtxKey{}, "10.0.0.1:12345")
+	result, err := strategy.handleDeploy(ctx, req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
 	assert.NoError(t, err)
 	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "deployment rejected")
 }
@@ -301,7 +305,8 @@ func TestMCPStrategy_handleDeploy_Success(t *testing.T) {
 		"config_yaml": "protocol: ssh\naddress: \":2222\"\ndescription: Deployed SSH\npasswordRegex: .*\n",
 	}
 
-	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	ctx := context.WithValue(context.Background(), remoteAddrCtxKey{}, "10.0.0.1:12345")
+	result, err := strategy.handleDeploy(ctx, req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
 	assert.NoError(t, err)
 	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "success")
 	assert.Equal(t, "ssh", deployed.Protocol)

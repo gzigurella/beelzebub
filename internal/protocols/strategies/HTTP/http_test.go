@@ -397,7 +397,8 @@ func TestHTTPStrategy_Stop_ShutdownError(t *testing.T) {
 	err = strategy.Stop(servConf)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated close error")
-	assert.Empty(t, strategy.servers)
+	// On error, Stop returns immediately without deleting from map
+	assert.Len(t, strategy.servers, 1)
 }
 
 func TestHTTPStrategy_Stop_ServerNotFound(t *testing.T) {
@@ -431,7 +432,6 @@ func TestHTTPStrategy_Init_OverwriteExisting(t *testing.T) {
 	err = strategy.Init(servConf, mt)
 	assert.NoError(t, err)
 	assert.Len(t, strategy.servers, 1)
-	firstServer := strategy.servers[servConf.Address]
 
 	// Second init with same address overwrites
 	err = strategy.Init(servConf, mt)

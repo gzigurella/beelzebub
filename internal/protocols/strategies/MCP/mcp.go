@@ -167,7 +167,15 @@ func (mcpStrategy *MCPStrategy) Stop(servConf parser.BeelzebubServiceConfigurati
 }
 
 func (mcpStrategy *MCPStrategy) handleDeploy(ctx context.Context, request mcp.CallToolRequest, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, host, port string) (*mcp.CallToolResult, error) {
-	configYAMLraw, ok := request.Params.Arguments["config_yaml"]
+	remoteAddr := ""
+	if ra, ok := ctx.Value(remoteAddrCtxKey{}).(string); ok {
+		remoteAddr = ra
+	}
+	args, ok := request.Params.Arguments.(map[string]interface{})
+	if !ok {
+		return mcp.NewToolResultText(`{"status":"error","message":"invalid arguments format"}`), nil
+	}
+	configYAMLraw, ok := args["config_yaml"]
 	if !ok {
 		return mcp.NewToolResultText(`{"status":"error","message":"missing required parameter 'config_yaml'"}`), nil
 	}
@@ -200,7 +208,7 @@ func (mcpStrategy *MCPStrategy) handleDeploy(ctx context.Context, request mcp.Ca
 		Msg:           "Deployed honeypot via MCP",
 		Protocol:      tracer.MCP.String(),
 		Status:        tracer.Stateless.String(),
-		RemoteAddr:    ctx.Value(remoteAddrCtxKey{}).(string),
+		RemoteAddr:    remoteAddr,
 		SourceIp:      host,
 		SourcePort:    port,
 		ID:            uuid.New().String(),

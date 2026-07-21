@@ -162,12 +162,13 @@ func (b *Builder) Run() error {
 		if b.prometheusServer == nil {
 			promMux := http.NewServeMux()
 			promMux.Handle(b.beelzebubCoreConfigurations.Core.Prometheus.Path, promhttp.Handler())
-			b.prometheusServer = &http.Server{
+			promSrv := &http.Server{
 				Addr:    b.beelzebubCoreConfigurations.Core.Prometheus.Port,
 				Handler: promMux,
 			}
+			b.prometheusServer = promSrv
 			go func() {
-				if err := b.prometheusServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				if err := promSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					log.Fatalf("Error init Prometheus: %s", err.Error())
 				}
 			}()
