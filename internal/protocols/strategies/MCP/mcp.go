@@ -100,8 +100,11 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 	go func() {
 		if err := httpServer.Start(servConf.Address); err != nil {
-			log.Errorf("Failed to start MCP server on %s: %v", servConf.Address, err)
-			return
+			if errors.Is(err, http.ErrServerClosed) {
+				log.Debugf("MCP server on %s stopped: %s", servConf.Address, err.Error())
+			} else {
+				log.Errorf("Failed to start MCP server on %s: %v", servConf.Address, err)
+			}
 		}
 	}()
 
