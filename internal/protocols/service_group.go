@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/HTTP"
@@ -18,29 +19,40 @@ import (
 type ServiceGroup struct {
 	pm         *ProtocolManager
 	strategies map[string]ServiceStrategy
+	mu         sync.Mutex
 }
 
 func NewServiceGroup(tracerStrategy tracer.Strategy) *ServiceGroup {
-	ssh := &SSH.SSHStrategy{}
-	http := &HTTP.HTTPStrategy{}
-	tcp := &TCP.TCPStrategy{}
-	mcp := &MCP.MCPStrategy{}
-	telnet := &TELNET.TelnetStrategy{}
-
-	pm := InitProtocolManager(
-		tracerStrategy,
-		ssh, http, tcp, mcp, telnet,
+	return NewServiceGroupWithStrategies(
+		InitProtocolManager(tracerStrategy, newDefaultStrategies()...),
+		defaultStrategyMap(),
 	)
+}
 
+func NewServiceGroupWithStrategies(pm *ProtocolManager, strategies map[string]ServiceStrategy) *ServiceGroup {
 	return &ServiceGroup{
-		pm: pm,
-		strategies: map[string]ServiceStrategy{
-			"ssh":    ssh,
-			"http":   http,
-			"tcp":    tcp,
-			"mcp":    mcp,
-			"telnet": telnet,
-		},
+		pm:         pm,
+		strategies: strategies,
+	}
+}
+
+func newDefaultStrategies() []ServiceStrategy {
+	return []ServiceStrategy{
+		&SSH.SSHStrategy{},
+		&HTTP.HTTPStrategy{},
+		&TCP.TCPStrategy{},
+		&MCP.MCPStrategy{},
+		&TELNET.TelnetStrategy{},
+	}
+}
+
+func defaultStrategyMap() map[string]ServiceStrategy {
+	return map[string]ServiceStrategy{
+		"ssh":    &SSH.SSHStrategy{},
+		"http":   &HTTP.HTTPStrategy{},
+		"tcp":    &TCP.TCPStrategy{},
+		"mcp":    &MCP.MCPStrategy{},
+		"telnet": &TELNET.TelnetStrategy{},
 	}
 }
 
@@ -63,6 +75,9 @@ func (sg *ServiceGroup) InitServices(configs []parser.BeelzebubServiceConfigurat
 }
 
 func (sg *ServiceGroup) Reload(oldConfigs, newConfigs []parser.BeelzebubServiceConfiguration) error {
+	sg.mu.Lock()
+	defer sg.mu.Unlock()
+
 	log.Infof("Hot-reload: updating %d services", len(newConfigs))
 
 	oldMap := buildConfigMap(oldConfigs)
@@ -107,16 +122,21 @@ func (sg *ServiceGroup) Reload(oldConfigs, newConfigs []parser.BeelzebubServiceC
 
 	if len(errs) > 0 {
 		for _, svc := range startedServices {
-			sg.pm.StopService(svc, sg.strategyForProtocol(svc.Protocol))
+			key := svc.Protocol + ":" + svc.Address
+			if err := sg.pm.StopService(svc, sg.strategyForProtocol(svc.Protocol)); err != nil {
+				log.Errorf("error rolling back %s: %s", key, err.Error())
+			}
 		}
 		for _, oldSvc := range stoppedServices {
 			strategy := sg.strategyForProtocol(oldSvc.Protocol)
 			if strategy == nil {
 				continue
 			}
+			key := oldSvc.Protocol + ":" + oldSvc.Address
 			if err := sg.pm.InitService(oldSvc, strategy); err != nil {
-				log.Errorf("error restarting %s during rollback: %s",
-					oldSvc.Protocol+":"+oldSvc.Address, err.Error())
+				log.Errorf("error restarting %s during rollback: %s", key, err.Error())
+			} else {
+				log.Infof("%s %s restarted (rollback)", strings.ToUpper(oldSvc.Protocol), oldSvc.Address)
 			}
 		}
 		return fmt.Errorf("reload failed, rolled back: %w", errors.Join(errs...))
