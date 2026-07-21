@@ -213,7 +213,11 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	go func() {
 		err := server.ListenAndServe()
 		if err != nil {
-			log.Errorf("error during init SSH Protocol: %s", err.Error())
+			if errors.Is(err, ssh.ErrServerClosed) {
+				log.Debugf("SSH server on %s stopped: %s", servConf.Address, err.Error())
+			} else {
+				log.Errorf("error during init SSH Protocol: %s", err.Error())
+			}
 		}
 	}()
 

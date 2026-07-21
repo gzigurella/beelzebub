@@ -49,6 +49,15 @@ func runBeelzebub(cmd *cobra.Command, _ []string) error {
 		return errors.New("no services configured: provide a services directory, set BEELZEBUB_SERVICES_CONFIG, or enable beelzebub-cloud")
 	}
 
+	fmt.Println(
+		`
+██████  ███████ ███████ ██      ███████ ███████ ██████  ██    ██ ██████  
+██   ██ ██      ██      ██         ███  ██      ██   ██ ██    ██ ██   ██ 
+██████  █████   █████   ██        ███   █████   ██████  ██    ██ ██████  
+██   ██ ██      ██      ██       ███    ██      ██   ██ ██    ██ ██   ██ 
+██████  ███████ ███████ ███████ ███████ ███████ ██████   ██████  ██████  
+Deception runtime framework, happy hacking!`)
+
 	beelzebubBuilder := builder.NewBuilder()
 	director := builder.NewDirector(beelzebubBuilder)
 

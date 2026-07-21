@@ -158,14 +158,6 @@ func (b *Builder) Close() error {
 }
 
 func (b *Builder) Run() error {
-	fmt.Println(
-		`
-██████  ███████ ███████ ██      ███████ ███████ ██████  ██    ██ ██████  
-██   ██ ██      ██      ██         ███  ██      ██   ██ ██    ██ ██   ██ 
-██████  █████   █████   ██        ███   █████   ██████  ██    ██ ██████  
-██   ██ ██      ██      ██       ███    ██      ██   ██ ██    ██ ██   ██ 
-██████  ███████ ███████ ███████ ███████ ███████ ██████   ██████  ██████  
-Deception runtime framework, happy hacking!`)
 
 	// Init Prometheus openmetrics with explicit server and custom mux
 	if (b.beelzebubCoreConfigurations.Core.Prometheus != parser.Prometheus{}) {

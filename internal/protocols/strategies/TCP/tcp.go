@@ -21,9 +21,10 @@ import (
 )
 
 type TCPStrategy struct {
-	Sessions  *historystore.HistoryStore
-	listeners []net.Listener
-	cleanerOnce sync.Once
+	Sessions     *historystore.HistoryStore
+	listeners    []net.Listener
+	cleanerOnce  sync.Once
+	wg           sync.WaitGroup
 }
 
 func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
@@ -42,7 +43,9 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 	tcpStrategy.listeners = append(tcpStrategy.listeners, listen)
 
+	tcpStrategy.wg.Add(1)
 	go func() {
+		defer tcpStrategy.wg.Done()
 		for {
 			conn, err := listen.Accept()
 			if err != nil {
@@ -84,6 +87,7 @@ func (tcpStrategy *TCPStrategy) StopAll() error {
 		}
 	}
 	tcpStrategy.listeners = nil
+	tcpStrategy.wg.Wait()
 	if len(errs) > 0 {
 		return fmt.Errorf("tcp stop errors: %w", errors.Join(errs...))
 	}
