@@ -1,6 +1,7 @@
 package MCP
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -224,4 +226,97 @@ func TestMCPStrategy_Stop_ServerNotFound(t *testing.T) {
 
 	err := strategy.Stop(parser.BeelzebubServiceConfiguration{Address: "test:0"})
 	assert.NoError(t, err)
+}
+
+func TestMCPStrategy_handleDeploy_MissingConfig(t *testing.T) {
+	strategy := &MCPStrategy{}
+	mt := &mockTracer{}
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = deployDeployToolName
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	assert.NoError(t, err)
+	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "missing required parameter")
+}
+
+func TestMCPStrategy_handleDeploy_InvalidYAML(t *testing.T) {
+	strategy := &MCPStrategy{}
+	mt := &mockTracer{}
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = deployDeployToolName
+	req.Params.Arguments = map[string]interface{}{"config_yaml": "{{ invalid yaml }"}
+
+	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	assert.NoError(t, err)
+	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "invalid YAML")
+}
+
+func TestMCPStrategy_handleDeploy_NoProtocol(t *testing.T) {
+	strategy := &MCPStrategy{}
+	mt := &mockTracer{}
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = deployDeployToolName
+	req.Params.Arguments = map[string]interface{}{"config_yaml": "address: \":9999\""}
+
+	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	assert.NoError(t, err)
+	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "'protocol' field")
+}
+
+func TestMCPStrategy_handleDeploy_DeployFnError(t *testing.T) {
+	deployErr := errors.New("deployment rejected")
+	strategy := &MCPStrategy{
+		deployFn: func(cfg parser.BeelzebubServiceConfiguration) error {
+			return deployErr
+		},
+	}
+	mt := &mockTracer{}
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = deployDeployToolName
+	req.Params.Arguments = map[string]interface{}{"config_yaml": "protocol: ssh\naddress: \":2222\""}
+
+	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	assert.NoError(t, err)
+	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "deployment rejected")
+}
+
+func TestMCPStrategy_handleDeploy_Success(t *testing.T) {
+	var deployed parser.BeelzebubServiceConfiguration
+	strategy := &MCPStrategy{
+		deployFn: func(cfg parser.BeelzebubServiceConfiguration) error {
+			deployed = cfg
+			return nil
+		},
+	}
+	mt := &mockTracer{}
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = deployDeployToolName
+	req.Params.Arguments = map[string]interface{}{
+		"config_yaml": "protocol: ssh\naddress: \":2222\"\ndescription: Deployed SSH\npasswordRegex: .*\n",
+	}
+
+	result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, mt, "10.0.0.1", "12345")
+	assert.NoError(t, err)
+	assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "success")
+	assert.Equal(t, "ssh", deployed.Protocol)
+	assert.Equal(t, ":2222", deployed.Address)
+
+	// Verify trace event was emitted
+	assert.Len(t, mt.events, 1)
+	assert.Contains(t, mt.events[0].Msg, "Deployed")
+}
+
+func TestMCPStrategy_SetDeployFn(t *testing.T) {
+	strategy := &MCPStrategy{}
+	assert.Nil(t, strategy.deployFn)
+
+	fn := func(cfg parser.BeelzebubServiceConfiguration) error { return nil }
+	strategy.SetDeployFn(fn)
+	assert.NotNil(t, strategy.deployFn)
 }

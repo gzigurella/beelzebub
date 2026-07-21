@@ -232,6 +232,52 @@ func TestStrategyForProtocol_ReturnsNilForUnknown(t *testing.T) {
 	assert.Nil(t, strategy)
 }
 
+func TestServiceGroup_StrategyForProtocol_Locks(t *testing.T) {
+	m := &mockStrategy{}
+	sg := NewServiceGroupWithStrategies(
+		InitProtocolManager(func(tracer.Event) {}, m),
+		map[string]ServiceStrategy{"ssh": m},
+	)
+
+	strategy := sg.StrategyForProtocol("ssh")
+	assert.NotNil(t, strategy)
+	// Thread-safe public accessor should also handle nil map
+	sg2 := NewServiceGroupWithStrategies(
+		InitProtocolManager(func(tracer.Event) {}),
+		nil,
+	)
+	assert.Nil(t, sg2.StrategyForProtocol("ssh"))
+}
+
+func TestServiceGroup_InitService(t *testing.T) {
+	m := &mockStrategy{}
+	sg := NewServiceGroupWithStrategies(
+		InitProtocolManager(func(tracer.Event) {}, m),
+		map[string]ServiceStrategy{"ssh": m},
+	)
+
+	err := sg.InitService(
+		parser.BeelzebubServiceConfiguration{Protocol: "ssh", Address: ":2222"},
+		m,
+	)
+	assert.NoError(t, err)
+}
+
+func TestServiceGroup_InitService_Error(t *testing.T) {
+	m := &mockStrategy{initErr: errors.New("init failure")}
+	sg := NewServiceGroupWithStrategies(
+		InitProtocolManager(func(tracer.Event) {}, m),
+		map[string]ServiceStrategy{"ssh": m},
+	)
+
+	err := sg.InitService(
+		parser.BeelzebubServiceConfiguration{Protocol: "ssh", Address: ":2222"},
+		m,
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "init failure")
+}
+
 func TestStrategyForProtocol_NilMap(t *testing.T) {
 	sg := NewServiceGroupWithStrategies(
 		InitProtocolManager(func(tracer.Event) {}),

@@ -118,6 +118,19 @@ func (sg *ServiceGroup) Reload(oldConfigs, newConfigs []parser.BeelzebubServiceC
 	return nil
 }
 
+func (sg *ServiceGroup) StrategyForProtocol(protocol string) ServiceStrategy {
+	sg.mu.Lock()
+	defer sg.mu.Unlock()
+	if sg.strategies == nil {
+		return nil
+	}
+	return sg.strategies[strings.ToLower(protocol)]
+}
+
+func (sg *ServiceGroup) InitService(cfg parser.BeelzebubServiceConfiguration, strategy ServiceStrategy) error {
+	return sg.pm.InitService(cfg, strategy)
+}
+
 func (sg *ServiceGroup) StopAll() error {
 	return sg.pm.StopAll()
 }

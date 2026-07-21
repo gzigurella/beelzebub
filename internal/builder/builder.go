@@ -3,9 +3,11 @@ package builder
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/plugins"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols"
+	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/MCP"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 	"github.com/beelzebub-labs/beelzebub/v3/pkg/plugin"
 
@@ -186,6 +189,12 @@ func (b *Builder) Run() error {
 	// Init Protocol strategies via ServiceGroup
 	b.serviceGroup = protocols.NewServiceGroup(b.traceStrategy)
 
+	// Wire the deploy callback into the MCP strategy so tools can
+	// deploy honeypot configurations at runtime.
+	if mcpStrategy, ok := b.serviceGroup.StrategyForProtocol("mcp").(*MCP.MCPStrategy); ok {
+		mcpStrategy.SetDeployFn(b.DeployService)
+	}
+
 	if b.beelzebubCoreConfigurations.Core.BeelzebubCloud.Enabled {
 		conf := b.beelzebubCoreConfigurations.Core.BeelzebubCloud
 
@@ -249,6 +258,35 @@ func (b *Builder) Reload(newConfigs []parser.BeelzebubServiceConfiguration) erro
 	}
 
 	b.beelzebubServicesConfiguration = newConfigs
+	return nil
+}
+
+func (b *Builder) DeployService(cfg parser.BeelzebubServiceConfiguration) error {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+
+	if b.closing.Load() {
+		return errors.New("builder is closing")
+	}
+
+	key := cfg.Protocol + ":" + cfg.Address
+	for _, existing := range b.beelzebubServicesConfiguration {
+		if existing.Protocol+":"+existing.Address == key {
+			return fmt.Errorf("service %s already exists", key)
+		}
+	}
+
+	strategy := b.serviceGroup.StrategyForProtocol(cfg.Protocol)
+	if strategy == nil {
+		return fmt.Errorf("protocol %q not supported", cfg.Protocol)
+	}
+
+	if err := b.serviceGroup.InitService(cfg, strategy); err != nil {
+		return fmt.Errorf("failed to deploy %s: %w", key, err)
+	}
+
+	b.beelzebubServicesConfiguration = append(b.beelzebubServicesConfiguration, cfg)
+	log.Infof("Deployed %s %s", strings.ToUpper(cfg.Protocol), cfg.Address)
 	return nil
 }
 

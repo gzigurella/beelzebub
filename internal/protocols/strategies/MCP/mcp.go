@@ -14,12 +14,22 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v3"
 )
+
+const deployDeployToolName = "beelzebub:deploy"
 
 type remoteAddrCtxKey struct{}
 
+type DeployFunc func(cfg parser.BeelzebubServiceConfiguration) error
+
 type MCPStrategy struct {
-	servers map[string]*server.StreamableHTTPServer
+	servers  map[string]*server.StreamableHTTPServer
+	deployFn DeployFunc
+}
+
+func (mcpStrategy *MCPStrategy) SetDeployFn(fn DeployFunc) {
+	mcpStrategy.deployFn = fn
 }
 
 func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
@@ -78,6 +88,10 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 		mcpServer.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			host, port, _ := net.SplitHostPort(ctx.Value(remoteAddrCtxKey{}).(string))
+
+			if toolConfig.Name == deployDeployToolName && mcpStrategy.deployFn != nil {
+				return mcpStrategy.handleDeploy(ctx, request, servConf, tr, host, port)
+			}
 
 			tr.TraceEvent(tracer.Event{
 				Msg:           "New MCP tool invocation",
@@ -150,4 +164,50 @@ func (mcpStrategy *MCPStrategy) Stop(servConf parser.BeelzebubServiceConfigurati
 	}
 	delete(mcpStrategy.servers, servConf.Address)
 	return nil
+}
+
+func (mcpStrategy *MCPStrategy) handleDeploy(ctx context.Context, request mcp.CallToolRequest, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, host, port string) (*mcp.CallToolResult, error) {
+	configYAMLraw, ok := request.Params.Arguments["config_yaml"]
+	if !ok {
+		return mcp.NewToolResultText(`{"status":"error","message":"missing required parameter 'config_yaml'"}`), nil
+	}
+	configYAML, ok := configYAMLraw.(string)
+	if !ok || configYAML == "" {
+		return mcp.NewToolResultText(`{"status":"error","message":"config_yaml must be a string"}`), nil
+	}
+
+	var cfg parser.BeelzebubServiceConfiguration
+	if err := yaml.Unmarshal([]byte(configYAML), &cfg); err != nil {
+		return mcp.NewToolResultText(fmt.Sprintf(`{"status":"error","message":"invalid YAML: %s"}`, err.Error())), nil
+	}
+
+	if cfg.Protocol == "" {
+		return mcp.NewToolResultText(`{"status":"error","message":"config must include a 'protocol' field"}`), nil
+	}
+
+	if err := cfg.CompileCommandRegex(); err != nil {
+		return mcp.NewToolResultText(fmt.Sprintf(`{"status":"error","message":"invalid regex: %s"}`, err.Error())), nil
+	}
+	if err := cfg.CompileTrustedProxies(); err != nil {
+		return mcp.NewToolResultText(fmt.Sprintf(`{"status":"error","message":"invalid trustedProxies: %s"}`, err.Error())), nil
+	}
+
+	if err := mcpStrategy.deployFn(cfg); err != nil {
+		return mcp.NewToolResultText(fmt.Sprintf(`{"status":"error","message":"deploy failed: %s"}`, err.Error())), nil
+	}
+
+	tr.TraceEvent(tracer.Event{
+		Msg:           "Deployed honeypot via MCP",
+		Protocol:      tracer.MCP.String(),
+		Status:        tracer.Stateless.String(),
+		RemoteAddr:    ctx.Value(remoteAddrCtxKey{}).(string),
+		SourceIp:      host,
+		SourcePort:    port,
+		ID:            uuid.New().String(),
+		Description:   servConf.Description,
+		Command:       fmt.Sprintf("%s|%s", request.Params.Name, request.Params.Arguments),
+		CommandOutput: fmt.Sprintf("deployed %s on %s", cfg.Protocol, cfg.Address),
+	})
+
+	return mcp.NewToolResultText(fmt.Sprintf(`{"status":"success","message":"deployed %s honeypot on %s"}`, cfg.Protocol, cfg.Address)), nil
 }

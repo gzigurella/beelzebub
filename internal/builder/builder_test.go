@@ -476,3 +476,100 @@ func TestBuilderClose_WithPrometheus(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, b.prometheusServer)
 }
+
+func TestBuilderDeployService_Success(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	require.NoError(t, b.Run())
+	time.Sleep(50 * time.Millisecond)
+
+	cfg := parser.BeelzebubServiceConfiguration{
+		Protocol: "http",
+		Address:  "127.0.0.1:0",
+	}
+	err := b.DeployService(cfg)
+	require.NoError(t, err)
+	assert.Len(t, b.beelzebubServicesConfiguration, 1)
+
+	b.Close()
+}
+
+func TestBuilderDeployService_Duplicate(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:8080"},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	require.NoError(t, b.Run())
+	time.Sleep(50 * time.Millisecond)
+
+	cfg := parser.BeelzebubServiceConfiguration{
+		Protocol: "http",
+		Address:  "127.0.0.1:8080",
+	}
+	err := b.DeployService(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+
+	b.Close()
+}
+
+func TestBuilderDeployService_UnknownProtocol(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	require.NoError(t, b.Run())
+	time.Sleep(50 * time.Millisecond)
+
+	cfg := parser.BeelzebubServiceConfiguration{
+		Protocol: "nonexistent",
+		Address:  "127.0.0.1:9999",
+	}
+	err := b.DeployService(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not supported")
+
+	b.Close()
+}
+
+func TestBuilderDeployService_Closing(t *testing.T) {
+	b := NewBuilder()
+	b.closing.Store(true)
+
+	cfg := parser.BeelzebubServiceConfiguration{
+		Protocol: "http",
+		Address:  "127.0.0.1:8080",
+	}
+	err := b.DeployService(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "builder is closing")
+}
+
+func TestBuilderDeployService_PreservesExistingConfigs(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:8080"},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	require.NoError(t, b.Run())
+	time.Sleep(50 * time.Millisecond)
+
+	cfg := parser.BeelzebubServiceConfiguration{
+		Protocol: "tcp",
+		Address:  "127.0.0.1:9090",
+	}
+	err := b.DeployService(cfg)
+	require.NoError(t, err)
+	assert.Len(t, b.beelzebubServicesConfiguration, 2)
+
+	b.Close()
+}
