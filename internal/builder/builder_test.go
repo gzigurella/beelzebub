@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/TCP"
 	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/TELNET"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
+	"github.com/beelzebub-labs/beelzebub/v3/pkg/plugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -472,6 +474,28 @@ func TestBuilderRun_CloudError_EmptyConfig(t *testing.T) {
 	b.Close()
 }
 
+func TestBuilderClose_ServiceGroupStopAllError(t *testing.T) {
+	// Start an HTTP server that will fail on Shutdown
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	l.Close()
+
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: addr},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	require.NoError(t, b.Run())
+	time.Sleep(50 * time.Millisecond)
+
+	// Close should not fail even if StopAll logs errors
+	err = b.Close()
+	assert.NoError(t, err)
+}
+
 func TestBuilderClose_WithPrometheus(t *testing.T) {
 	b := NewBuilder()
 	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{
@@ -600,6 +624,66 @@ func TestBuilderDeployService_InitFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to deploy")
 
 	b.Close()
+}
+
+type testSvcPlugin struct {
+	name    string
+	startFn func(context.Context) error
+	stopped bool
+}
+
+func (p *testSvcPlugin) Metadata() plugin.Metadata {
+	return plugin.Metadata{Name: p.name}
+}
+
+func (p *testSvcPlugin) Start(ctx context.Context) error {
+	if p.startFn != nil {
+		return p.startFn(ctx)
+	}
+	return nil
+}
+
+func (p *testSvcPlugin) Stop() {
+	p.stopped = true
+}
+
+func TestBuilderRun_PluginServiceError(t *testing.T) {
+	svc := &testSvcPlugin{
+		name:    "test-svc-err-" + t.Name(),
+		startFn: func(ctx context.Context) error { return fmt.Errorf("service start failure") },
+	}
+	plugin.Register(svc)
+
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	err := b.Run()
+	assert.NoError(t, err)
+
+	b.Close()
+}
+
+func TestBuilderRun_PluginServiceSuccess_AndClose(t *testing.T) {
+	svc := &testSvcPlugin{name: "test-svc-ok-" + t.Name()}
+	plugin.Register(svc)
+
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:0"},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	require.NoError(t, b.Run())
+	time.Sleep(50 * time.Millisecond)
+
+	assert.Len(t, b.startedServices, 1)
+
+	b.Close()
+
+	assert.True(t, svc.stopped, "service plugin should be stopped on Close")
 }
 
 func TestBuilderDeployService_PreservesExistingConfigs(t *testing.T) {

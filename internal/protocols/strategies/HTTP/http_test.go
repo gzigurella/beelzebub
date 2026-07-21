@@ -575,8 +575,71 @@ func TestRealClientAddr_XFFAllTrustedFallbackToXRI(t *testing.T) {
 	assert.Equal(t, "12345", port)
 }
 
-func TestHTTPStrategy_Init_ValidWithPlugins(t *testing.T) {
-	// Quick smoke test that Init works when plugins are set.
-	// We don't actually test the handler/plugin dispatch here since that's
-	// exercised by TestBuildHTTPResponse_* tests.
+func TestHTTPStrategy_HandleRequest_StaticResponse(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	l.Close()
+
+	strategy := &HTTPStrategy{}
+	mt := &mockTracer{}
+
+	rex := regexp.MustCompile("^/test$")
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:     addr,
+		Description: "test HTTP",
+		Commands: []parser.Command{
+			{Regex: rex, Handler: "test response", StatusCode: 200, Name: "test-cmd"},
+		},
+	}
+
+	err = strategy.Init(servConf, mt)
+	require.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/test", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, "test response", string(body))
+	assert.Equal(t, 200, resp.StatusCode)
+
+	strategy.StopAll()
+}
+
+func TestHTTPStrategy_HandleRequest_Fallback(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	l.Close()
+
+	strategy := &HTTPStrategy{}
+	mt := &mockTracer{}
+
+	rex := regexp.MustCompile("^/test$")
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:     addr,
+		Description: "test HTTP",
+		Commands: []parser.Command{
+			{Regex: rex, Handler: "test response", StatusCode: 200},
+		},
+		FallbackCommand: parser.Command{
+			Handler: "not found", StatusCode: 404, Name: "fallback",
+		},
+	}
+
+	err = strategy.Init(servConf, mt)
+	require.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/unknown", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, "not found", string(body))
+	assert.Equal(t, 404, resp.StatusCode)
+
+	strategy.StopAll()
 }

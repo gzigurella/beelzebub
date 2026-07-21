@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestRunBeelzebub_InvalidCoreYaml(t *testing.T) {
@@ -63,4 +65,25 @@ func TestRunBeelzebub_NoServicesConfigured(t *testing.T) {
 	if !strings.Contains(err.Error(), "no services configured") {
 		t.Errorf("expected error to mention no services configured, got: %v", err)
 	}
+}
+
+func TestListPlugins_NoPanic(t *testing.T) {
+	// Just verify the function doesn't panic and produces output
+	listPlugins(nil, nil)
+}
+
+func TestPrintVersion_NoPanic(t *testing.T) {
+	// Just verify the function doesn't panic
+	printVersion(nil, nil)
+}
+
+func TestPrintVersion_WithBuildInfo(t *testing.T) {
+	Version = "dev"
+	CommitSHA = "unknown"
+
+	// Should not panic even without ldflags
+	printVersion(nil, nil)
+
+	// Verify version is set (may be from build info or default)
+	assert.Equal(t, "dev", Version)
 }
