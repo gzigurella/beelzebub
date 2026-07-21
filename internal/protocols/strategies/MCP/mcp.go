@@ -19,10 +19,16 @@ import (
 type remoteAddrCtxKey struct{}
 
 type MCPStrategy struct {
-	servers []*server.StreamableHTTPServer
+	servers map[string]*server.StreamableHTTPServer
 }
 
 func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+	if oldServer, ok := mcpStrategy.servers[servConf.Address]; ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		oldServer.Shutdown(ctx)
+		cancel()
+	}
+
 	mcpServer := server.NewMCPServer(
 		servConf.Description,
 		"1.0.0",
@@ -96,7 +102,10 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		}),
 	)
 
-	mcpStrategy.servers = append(mcpStrategy.servers, httpServer)
+	if mcpStrategy.servers == nil {
+		mcpStrategy.servers = make(map[string]*server.StreamableHTTPServer)
+	}
+	mcpStrategy.servers[servConf.Address] = httpServer
 
 	go func() {
 		if err := httpServer.Start(servConf.Address); err != nil {
@@ -125,5 +134,20 @@ func (mcpStrategy *MCPStrategy) StopAll() error {
 	if len(errs) > 0 {
 		return fmt.Errorf("mcp stop errors: %w", errors.Join(errs...))
 	}
+	return nil
+}
+
+func (mcpStrategy *MCPStrategy) Stop(servConf parser.BeelzebubServiceConfiguration) error {
+	srv, ok := mcpStrategy.servers[servConf.Address]
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Errorf("error shutting down MCP server on %s: %s", servConf.Address, err.Error())
+		return err
+	}
+	delete(mcpStrategy.servers, servConf.Address)
 	return nil
 }

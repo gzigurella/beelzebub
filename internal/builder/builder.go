@@ -42,6 +42,7 @@ type Builder struct {
 	servicesCancel                 context.CancelFunc
 
 	protocolManager *protocols.ProtocolManager
+	protocolStrategies map[string]protocols.ServiceStrategy
 	prometheusServer *http.Server
 	beelzebubCloud  *plugins.BeelzebubCloud
 
@@ -205,6 +206,14 @@ func (b *Builder) Run() error {
 		telnetStrategy,
 	)
 
+	b.protocolStrategies = map[string]protocols.ServiceStrategy{
+		"ssh":    secureShellStrategy,
+		"http":   hypertextTransferProtocolStrategy,
+		"tcp":    transmissionControlProtocolStrategy,
+		"mcp":    modelContextProtocolStrategy,
+		"telnet": telnetStrategy,
+	}
+
 	if b.beelzebubCoreConfigurations.Core.BeelzebubCloud.Enabled {
 		conf := b.beelzebubCoreConfigurations.Core.BeelzebubCloud
 
@@ -288,31 +297,94 @@ func (b *Builder) Reload(newConfigs []parser.BeelzebubServiceConfiguration) erro
 	log.Infof("Hot-reload: updating %d services", len(newConfigs))
 
 	oldConfigs := b.beelzebubServicesConfiguration
+	oldMap := make(map[string]parser.BeelzebubServiceConfiguration)
+	for _, cfg := range oldConfigs {
+		key := cfg.Protocol + ":" + cfg.Address
+		oldMap[key] = cfg
+	}
 
-	b.Close()
+	// Build new config map with duplicate detection
+	newMap := make(map[string]parser.BeelzebubServiceConfiguration)
+	for _, cfg := range newConfigs {
+		key := cfg.Protocol + ":" + cfg.Address
+		if _, exists := newMap[key]; exists {
+			log.Warnf("duplicate service %s in config, ignoring duplicate", key)
+			continue
+		}
+		newMap[key] = cfg
+	}
+
+	var stoppedServices []parser.BeelzebubServiceConfiguration
+
+	// Stop services that were removed or changed
+	for key, oldCfg := range oldMap {
+		newCfg, exists := newMap[key]
+		if !exists || configChanged(oldCfg, newCfg) {
+			if err := b.protocolManager.StopService(oldCfg, b.strategyForProtocol(oldCfg.Protocol)); err != nil {
+				log.Errorf("error stopping %s: %s", key, err.Error())
+			}
+			stoppedServices = append(stoppedServices, oldCfg)
+		}
+	}
+
+	// Track started services for potential rollback
+	var startedServices []parser.BeelzebubServiceConfiguration
+	var errs []error
+
+	// Start services that are new or changed
+	for _, newCfg := range newConfigs {
+		key := newCfg.Protocol + ":" + newCfg.Address
+		oldCfg, exists := oldMap[key]
+		if exists && !configChanged(oldCfg, newCfg) {
+			continue
+		}
+
+		strategy := b.strategyForProtocol(newCfg.Protocol)
+		if strategy == nil {
+			log.Warnf("protocol %q not managed, skipping", newCfg.Protocol)
+			continue
+		}
+
+		if err := b.protocolManager.InitService(newCfg, strategy); err != nil {
+			log.Errorf("error starting %s: %s", key, err.Error())
+			errs = append(errs, fmt.Errorf("error starting %s: %w", key, err))
+			continue
+		}
+
+		startedServices = append(startedServices, newCfg)
+
+		log.Infof("%s %s ready (%d commands)",
+			strings.ToUpper(newCfg.Protocol),
+			newCfg.Address,
+			len(newCfg.Commands))
+	}
+
+	if len(errs) > 0 {
+		// Rollback: stop any new services that were started
+		for _, svc := range startedServices {
+			key := svc.Protocol + ":" + svc.Address
+			if err := b.protocolManager.StopService(svc, b.strategyForProtocol(svc.Protocol)); err != nil {
+				log.Errorf("error rolling back %s: %s", key, err.Error())
+			}
+		}
+		// Restart old services that were stopped
+		for _, oldSvc := range stoppedServices {
+			key := oldSvc.Protocol + ":" + oldSvc.Address
+			strategy := b.strategyForProtocol(oldSvc.Protocol)
+			if strategy == nil {
+				continue
+			}
+			if err := b.protocolManager.InitService(oldSvc, strategy); err != nil {
+				log.Errorf("error restarting %s during rollback: %s", key, err.Error())
+			} else {
+				log.Infof("%s %s restarted (rollback)", strings.ToUpper(oldSvc.Protocol), oldSvc.Address)
+			}
+		}
+		return fmt.Errorf("reload failed, rolled back: %w", errors.Join(errs...))
+	}
 
 	b.beelzebubServicesConfiguration = newConfigs
-	b.protocolManager = nil
-
-	// Re-establish broker connections if they were configured
-	if b.beelzebubCoreConfigurations != nil && b.beelzebubCoreConfigurations.Core.Tracings.RabbitMQ.Enabled {
-		if err := b.buildRabbitMQ(b.beelzebubCoreConfigurations.Core.Tracings.RabbitMQ.URI); err != nil {
-			return fmt.Errorf("re-establishing RabbitMQ after reload: %w", err)
-		}
-	}
-
-	if err := b.Run(); err != nil {
-		log.Errorf("reload failed with new configs: %s; attempting rollback", err.Error())
-		b.beelzebubServicesConfiguration = oldConfigs
-		b.protocolManager = nil
-		if rbErr := b.Run(); rbErr != nil {
-			log.Fatalf("reload rollback also failed: %s", rbErr.Error())
-		}
-		b.closing.Store(false)
-		return fmt.Errorf("reload failed, rolled back to previous configs: %w", err)
-	}
-
-	b.closing.Store(false)
+	log.Infof("Started %d service(s)", len(newConfigs))
 	return nil
 }
 
@@ -330,4 +402,20 @@ func (b *Builder) build() *Builder {
 
 func NewBuilder() *Builder {
 	return &Builder{}
+}
+
+func configChanged(oldCfg, newCfg parser.BeelzebubServiceConfiguration) bool {
+	oldHash, err1 := oldCfg.HashCode()
+	newHash, err2 := newCfg.HashCode()
+	if err1 != nil || err2 != nil {
+		return true
+	}
+	return oldHash != newHash
+}
+
+func (b *Builder) strategyForProtocol(protocol string) protocols.ServiceStrategy {
+	if b.protocolStrategies == nil {
+		return nil
+	}
+	return b.protocolStrategies[strings.ToLower(protocol)]
 }

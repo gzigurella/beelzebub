@@ -101,7 +101,7 @@ func TestSSHStrategy_StopAll(t *testing.T) {
 	}
 
 	assert.NoError(t, strategy.Init(servConf, mt))
-	assert.Len(t, strategy.servers, 1)
+	assert.Equal(t, 1, len(strategy.servers))
 
 	assert.NoError(t, strategy.StopAll())
 	assert.Nil(t, strategy.servers)
@@ -125,14 +125,14 @@ func TestSSHStrategy_StopAll_MultipleInits(t *testing.T) {
 
 	assert.NoError(t, strategy.Init(servConf, mt))
 	assert.NoError(t, strategy.Init(servConf, mt))
-	assert.Len(t, strategy.servers, 2)
+	assert.Equal(t, 1, len(strategy.servers))
 
 	assert.NoError(t, strategy.StopAll())
 	assert.Nil(t, strategy.servers)
 
 	// Verify servers can be restarted after StopAll
 	assert.NoError(t, strategy.Init(servConf, mt))
-	assert.Len(t, strategy.servers, 1)
+	assert.Equal(t, 1, len(strategy.servers))
 
 	time.Sleep(100 * time.Millisecond)
 	assert.NoError(t, strategy.StopAll())
@@ -162,7 +162,7 @@ func TestSSHStrategy_StopAll_ShutdownError(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	strategy := &SSHStrategy{}
-	strategy.servers = append(strategy.servers, server)
+	strategy.servers = map[string]*ssh.Server{"test:0": server}
 
 	err = strategy.StopAll()
 	require.Error(t, err)

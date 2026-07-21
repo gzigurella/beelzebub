@@ -23,12 +23,18 @@ import (
 )
 
 type SSHStrategy struct {
-	Sessions          *historystore.HistoryStore
-	servers           []*ssh.Server
-	cleanerOnce       sync.Once
+	Sessions     *historystore.HistoryStore
+	servers      map[string]*ssh.Server
+	cleanerOnce  sync.Once
 }
 
 func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+	if oldServer, ok := sshStrategy.servers[servConf.Address]; ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		oldServer.Shutdown(ctx)
+		cancel()
+	}
+
 	if sshStrategy.Sessions == nil {
 		sshStrategy.Sessions = historystore.NewHistoryStore()
 	}
@@ -208,7 +214,10 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		},
 	}
 
-	sshStrategy.servers = append(sshStrategy.servers, server)
+	if sshStrategy.servers == nil {
+		sshStrategy.servers = make(map[string]*ssh.Server)
+	}
+	sshStrategy.servers[servConf.Address] = server
 
 	go func() {
 		err := server.ListenAndServe()
@@ -242,6 +251,21 @@ func (sshStrategy *SSHStrategy) StopAll() error {
 	if len(errs) > 0 {
 		return fmt.Errorf("ssh stop errors: %w", errors.Join(errs...))
 	}
+	return nil
+}
+
+func (sshStrategy *SSHStrategy) Stop(servConf parser.BeelzebubServiceConfiguration) error {
+	server, ok := sshStrategy.servers[servConf.Address]
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Errorf("error shutting down SSH server on %s: %s", servConf.Address, err.Error())
+		return err
+	}
+	delete(sshStrategy.servers, servConf.Address)
 	return nil
 }
 

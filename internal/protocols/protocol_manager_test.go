@@ -15,6 +15,10 @@ func (mockServiceStrategy mockServiceStrategyValid) Init(beelzebubServiceConfigu
 	return nil
 }
 
+func (mockServiceStrategy mockServiceStrategyValid) Stop(servConf parser.BeelzebubServiceConfiguration) error {
+	return nil
+}
+
 func (mockServiceStrategy mockServiceStrategyValid) StopAll() error {
 	return nil
 }
@@ -24,6 +28,10 @@ type mockServiceStrategyError struct {
 
 func (mockServiceStrategy mockServiceStrategyError) Init(beelzebubServiceConfiguration parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	return errors.New("mockError")
+}
+
+func (mockServiceStrategy mockServiceStrategyError) Stop(servConf parser.BeelzebubServiceConfiguration) error {
+	return nil
 }
 
 func (mockServiceStrategy mockServiceStrategyError) StopAll() error {
@@ -101,6 +109,10 @@ func (r *recorderStrategy) Init(conf parser.BeelzebubServiceConfiguration, _ tra
 	return nil
 }
 
+func (r *recorderStrategy) Stop(servConf parser.BeelzebubServiceConfiguration) error {
+	return nil
+}
+
 func (r *recorderStrategy) StopAll() error {
 	return nil
 }
@@ -112,7 +124,11 @@ func (mockServiceStrategy mockServiceStrategyStopAllError) Init(beelzebubService
 	return nil
 }
 
-func (mockServiceStrategy mockServiceStrategyStopAllError) StopAll() error {
+func (s mockServiceStrategyStopAllError) Stop(servConf parser.BeelzebubServiceConfiguration) error {
+	return nil
+}
+
+func (s mockServiceStrategyStopAllError) StopAll() error {
 	return errors.New("stopAllError")
 }
 
@@ -121,6 +137,10 @@ type mockServiceStrategyCallCounter struct {
 }
 
 func (m *mockServiceStrategyCallCounter) Init(beelzebubServiceConfiguration parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+	return nil
+}
+
+func (m *mockServiceStrategyCallCounter) Stop(servConf parser.BeelzebubServiceConfiguration) error {
 	return nil
 }
 

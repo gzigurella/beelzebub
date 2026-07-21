@@ -20,7 +20,7 @@ import (
 )
 
 type HTTPStrategy struct {
-	servers []*http.Server
+	servers map[string]*http.Server
 }
 
 type httpResponse struct {
@@ -30,6 +30,12 @@ type httpResponse struct {
 }
 
 func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+	if oldServer, ok := httpStrategy.servers[servConf.Address]; ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		oldServer.Shutdown(ctx)
+		cancel()
+	}
+
 	serverMux := http.NewServeMux()
 
 	serverMux.HandleFunc("/", func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -70,7 +76,10 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		Handler: serverMux,
 	}
 
-	httpStrategy.servers = append(httpStrategy.servers, srv)
+	if httpStrategy.servers == nil {
+		httpStrategy.servers = make(map[string]*http.Server)
+	}
+	httpStrategy.servers[servConf.Address] = srv
 
 	go func() {
 		var err error
@@ -102,6 +111,21 @@ func (httpStrategy *HTTPStrategy) StopAll() error {
 	if len(errs) > 0 {
 		return fmt.Errorf("http stop errors: %w", errors.Join(errs...))
 	}
+	return nil
+}
+
+func (httpStrategy *HTTPStrategy) Stop(servConf parser.BeelzebubServiceConfiguration) error {
+	srv, ok := httpStrategy.servers[servConf.Address]
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Errorf("error shutting down HTTP server on %s: %s", servConf.Address, err.Error())
+		return err
+	}
+	delete(httpStrategy.servers, servConf.Address)
 	return nil
 }
 

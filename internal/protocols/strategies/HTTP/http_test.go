@@ -317,7 +317,7 @@ func TestHTTPStrategy_Init_FallbackCommand(t *testing.T) {
 		Addr:    "127.0.0.1:0",
 		Handler: mux,
 	}
-	strategy.servers = append(strategy.servers, srv)
+	strategy.servers = map[string]*http.Server{"test:0": srv}
 
 	servConf := parser.BeelzebubServiceConfiguration{
 		Address:     "127.0.0.1:0",
@@ -370,7 +370,7 @@ func TestHTTPStrategy_StopAll_ShutdownError(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	strategy := &HTTPStrategy{}
-	strategy.servers = append(strategy.servers, srv)
+	strategy.servers = map[string]*http.Server{"test:0": srv}
 
 	err = strategy.StopAll()
 	require.Error(t, err)

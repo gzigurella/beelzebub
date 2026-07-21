@@ -156,7 +156,7 @@ func TestMCPStrategy_StopAll_MultipleInits(t *testing.T) {
 
 	assert.NoError(t, strategy.Init(servConf, mt))
 	assert.NoError(t, strategy.Init(servConf, mt))
-	assert.Len(t, strategy.servers, 2)
+	assert.Equal(t, 1, len(strategy.servers))
 
 	assert.NoError(t, strategy.StopAll())
 	assert.Nil(t, strategy.servers)
@@ -187,7 +187,7 @@ func TestMCPStrategy_StopAll_ShutdownError(t *testing.T) {
 	)
 
 	strategy := &MCPStrategy{}
-	strategy.servers = append(strategy.servers, httpServer)
+	strategy.servers = map[string]*server.StreamableHTTPServer{"test:0": httpServer}
 
 	err = strategy.StopAll()
 	require.Error(t, err)

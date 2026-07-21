@@ -34,12 +34,17 @@ const (
 
 type TelnetStrategy struct {
 	Sessions     *historystore.HistoryStore
-	listeners    []net.Listener
+	listeners    map[string]net.Listener
 	cleanerOnce  sync.Once
 	wg           sync.WaitGroup
 }
 
 func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+	if oldListener, ok := telnetStrategy.listeners[servConf.Address]; ok {
+		oldListener.Close()
+		telnetStrategy.wg.Wait()
+	}
+
 	if telnetStrategy.Sessions == nil {
 		telnetStrategy.Sessions = historystore.NewHistoryStore()
 	}
@@ -53,7 +58,10 @@ func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfi
 		return err
 	}
 
-	telnetStrategy.listeners = append(telnetStrategy.listeners, listener)
+	if telnetStrategy.listeners == nil {
+		telnetStrategy.listeners = make(map[string]net.Listener)
+	}
+	telnetStrategy.listeners[servConf.Address] = listener
 
 	telnetStrategy.wg.Add(1)
 	go func() {
@@ -101,6 +109,19 @@ func (telnetStrategy *TelnetStrategy) StopAll() error {
 	if len(errs) > 0 {
 		return fmt.Errorf("telnet stop errors: %w", errors.Join(errs...))
 	}
+	return nil
+}
+
+func (telnetStrategy *TelnetStrategy) Stop(servConf parser.BeelzebubServiceConfiguration) error {
+	listener, ok := telnetStrategy.listeners[servConf.Address]
+	if !ok {
+		return nil
+	}
+	if err := listener.Close(); err != nil {
+		return err
+	}
+	telnetStrategy.wg.Wait()
+	delete(telnetStrategy.listeners, servConf.Address)
 	return nil
 }
 

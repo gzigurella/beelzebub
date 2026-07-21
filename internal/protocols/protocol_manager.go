@@ -9,6 +9,7 @@ import (
 
 type ServiceStrategy interface {
 	Init(beelzebubServiceConfiguration parser.BeelzebubServiceConfiguration, tracer tracer.Tracer) error
+	Stop(servConf parser.BeelzebubServiceConfiguration) error
 	StopAll() error
 }
 
@@ -43,4 +44,8 @@ func (pm *ProtocolManager) StopAll() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (pm *ProtocolManager) StopService(servConf parser.BeelzebubServiceConfiguration, strategy ServiceStrategy) error {
+	return strategy.Stop(servConf)
 }

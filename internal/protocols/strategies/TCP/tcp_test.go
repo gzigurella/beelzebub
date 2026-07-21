@@ -225,7 +225,7 @@ func TestTCPStrategy_StopAll_AlreadyClosed(t *testing.T) {
 	listener.Close()
 
 	strategy := newStrategyWithSessions()
-	strategy.listeners = append(strategy.listeners, listener)
+	strategy.listeners = map[string]net.Listener{"test:0": listener}
 
 	// Close on an already-closed listener returns an error now
 	err := strategy.StopAll()
