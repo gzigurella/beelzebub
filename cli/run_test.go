@@ -4,9 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/beelzebub-labs/beelzebub/v3/pkg/plugin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRunBeelzebub_InvalidCoreYaml(t *testing.T) {
@@ -86,4 +89,50 @@ func TestPrintVersion_WithBuildInfo(t *testing.T) {
 
 	// Verify version is set (may be from build info or default)
 	assert.Equal(t, "dev", Version)
+}
+
+func TestRunBeelzebub_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write minimal core config
+	corePath := filepath.Join(tmpDir, "core.yaml")
+	os.WriteFile(corePath, []byte(`core:
+  logging:
+    debug: false
+    debugReportCaller: false
+    logDisableTimestamp: true
+  beelzebub-cloud:
+    enabled: false
+`), 0644)
+
+	// Write a minimal service config with a dynamic port
+	svcDir := filepath.Join(tmpDir, "services")
+	os.Mkdir(svcDir, 0755)
+	os.WriteFile(filepath.Join(svcDir, "svc.yaml"), []byte(`apiVersion: "v1"
+protocol: "http"
+address: "127.0.0.1:0"
+description: "test"
+`), 0644)
+
+	rootConfCore = corePath
+	rootConfServices = svcDir
+	runMemLimitMiB = -1
+
+	// Inject a pre-filled signal channel so runBeelzebub returns immediately
+	// after starting services and reaching the signal wait.
+	sigCh := make(chan os.Signal, 1)
+	sigCh <- syscall.SIGTERM
+	testShutdownCh = sigCh
+	defer func() { testShutdownCh = nil }()
+
+	err := runBeelzebub(runCmd, nil)
+	assert.NoError(t, err)
+}
+
+func TestListPlugins_Empty(t *testing.T) {
+	plugin.Cleanup()
+
+	// Should handle empty state without panic
+	listPlugins(nil, nil)
+	require.Empty(t, plugin.List())
 }

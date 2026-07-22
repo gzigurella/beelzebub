@@ -686,6 +686,62 @@ func TestBuilderRun_PluginServiceSuccess_AndClose(t *testing.T) {
 	assert.True(t, svc.stopped, "service plugin should be stopped on Close")
 }
 
+func TestBuilderRun_Prometheus_ListenError(t *testing.T) {
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{
+		Core: struct {
+			Logging        parser.Logging        `yaml:"logging"`
+			Tracings       parser.Tracings       `yaml:"tracings"`
+			Prometheus     parser.Prometheus     `yaml:"prometheus"`
+			BeelzebubCloud parser.BeelzebubCloud `yaml:"beelzebub-cloud"`
+		}{
+			Prometheus: parser.Prometheus{
+				Path: "/metrics",
+				Port: "127.0.0.1:1",
+			},
+		},
+	}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	// Should not panic — log.Errorf is used instead of log.Fatalf
+	err := b.Run()
+	assert.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	b.Close()
+}
+
+func TestBuilderRun_CloudHTTPError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{
+		Core: struct {
+			Logging        parser.Logging        `yaml:"logging"`
+			Tracings       parser.Tracings       `yaml:"tracings"`
+			Prometheus     parser.Prometheus     `yaml:"prometheus"`
+			BeelzebubCloud parser.BeelzebubCloud `yaml:"beelzebub-cloud"`
+		}{
+			BeelzebubCloud: parser.BeelzebubCloud{
+				Enabled:   true,
+				URI:       ts.URL,
+				AuthToken: "test-token",
+				PollingIntervalSeconds: 9999,
+			},
+		},
+	}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	err := b.Run()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Response code: 500")
+}
+
 func TestBuilderDeployService_PreservesExistingConfigs(t *testing.T) {
 	b := NewBuilder()
 	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}

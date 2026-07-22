@@ -169,7 +169,7 @@ func (b *Builder) Run() error {
 			b.prometheusServer = promSrv
 			go func() {
 				if err := promSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					log.Fatalf("Error init Prometheus: %s", err.Error())
+					log.Errorf("Error init Prometheus: %s", err.Error())
 				}
 			}()
 		}

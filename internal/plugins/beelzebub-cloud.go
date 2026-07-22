@@ -81,7 +81,7 @@ func InitBeelzebubCloud(uri, authToken string, onChange OnConfigChanged, polling
 	if onChange != nil {
 		go func() {
 			if err := beelzebubCloud.verifyConfigurationsChanged(); err != nil {
-				log.Fatalf("Error verify configurations changed: %s", err.Error())
+				log.Errorf("Error verify configurations changed: %s", err.Error())
 			}
 		}()
 	}
