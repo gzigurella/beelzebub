@@ -23,9 +23,9 @@ import (
 )
 
 type SSHStrategy struct {
-	Sessions     *historystore.HistoryStore
-	servers      map[string]*ssh.Server
-	cleanerOnce  sync.Once
+	Sessions    *historystore.HistoryStore
+	servers     map[string]*ssh.Server
+	cleanerOnce sync.Once
 }
 
 func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
