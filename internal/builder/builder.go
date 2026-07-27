@@ -36,13 +36,13 @@ type Builder struct {
 	startedServices                []plugin.ServicePlugin
 	servicesCancel                 context.CancelFunc
 
-	serviceGroup *protocols.ServiceGroup
+	serviceGroup     *protocols.ServiceGroup
 	prometheusServer *http.Server
-	beelzebubCloud  *plugins.BeelzebubCloud
+	beelzebubCloud   *plugins.BeelzebubCloud
 
-	reloadMu  sync.Mutex
-	reloadCh  chan []parser.BeelzebubServiceConfiguration
-	closing   atomic.Bool
+	reloadMu sync.Mutex
+	reloadCh chan []parser.BeelzebubServiceConfiguration
+	closing  atomic.Bool
 }
 
 func (b *Builder) setTraceStrategy(traceStrategy tracer.Strategy) {

@@ -256,7 +256,7 @@ func TestBuilderReload_RollbackOnFailure(t *testing.T) {
 		{Protocol: "tcp", Address: "invalid-address-no-port"},
 	}
 	err = b.Reload(invalidConfigs)
-	require.Error(t, err)                // should report the reload failure
+	require.Error(t, err) // should report the reload failure
 	require.Contains(t, err.Error(), "reload failed, rolled back")
 
 	// After rollback, old config should be running.
@@ -459,8 +459,8 @@ func TestBuilderRun_CloudError_EmptyConfig(t *testing.T) {
 			BeelzebubCloud parser.BeelzebubCloud `yaml:"beelzebub-cloud"`
 		}{
 			BeelzebubCloud: parser.BeelzebubCloud{
-				Enabled: true,
-				URI:     ts.URL,
+				Enabled:   true,
+				URI:       ts.URL,
 				AuthToken: "test-token",
 			},
 		},
@@ -727,9 +727,9 @@ func TestBuilderRun_CloudHTTPError(t *testing.T) {
 			BeelzebubCloud parser.BeelzebubCloud `yaml:"beelzebub-cloud"`
 		}{
 			BeelzebubCloud: parser.BeelzebubCloud{
-				Enabled:   true,
-				URI:       ts.URL,
-				AuthToken: "test-token",
+				Enabled:                true,
+				URI:                    ts.URL,
+				AuthToken:              "test-token",
 				PollingIntervalSeconds: 9999,
 			},
 		},
