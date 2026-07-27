@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/beelzebub-labs/beelzebub/v3/pkg/plugin"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,8 +73,9 @@ func TestRunBeelzebub_NoServicesConfigured(t *testing.T) {
 }
 
 func TestListPlugins_NoPanic(t *testing.T) {
-	// Just verify the function doesn't panic and produces output
-	listPlugins(nil, nil)
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	listPlugins(cmd, nil)
 }
 
 func TestPrintVersion_NoPanic(t *testing.T) {
@@ -132,7 +135,8 @@ description: "test"
 func TestListPlugins_Empty(t *testing.T) {
 	plugin.Cleanup()
 
-	// Should handle empty state without panic
-	listPlugins(nil, nil)
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	listPlugins(cmd, nil)
 	require.Empty(t, plugin.List())
 }
