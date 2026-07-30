@@ -504,89 +504,44 @@ func TestBuilderReload_GoroutineError(t *testing.T) {
 	b.Close()
 }
 
-func TestBuilderCloud_CallbackReloadChNil(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":"1","config":"protocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"test\"","tokenId":"token"}]`))
-	}))
-	defer ts.Close()
-
+func TestBuilderHandleCloudConfigChange_Enqueues(t *testing.T) {
 	b := NewBuilder()
-	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{
-		Core: struct {
-			Logging        parser.Logging        `yaml:"logging"`
-			Tracings       parser.Tracings       `yaml:"tracings"`
-			Prometheus     parser.Prometheus     `yaml:"prometheus"`
-			BeelzebubCloud parser.BeelzebubCloud `yaml:"beelzebub-cloud"`
-		}{
-			BeelzebubCloud: parser.BeelzebubCloud{
-				Enabled:                true,
-				URI:                    ts.URL,
-				AuthToken:              "test-token",
-				PollingIntervalSeconds: 1,
-			},
-		},
+	b.reloadCh = make(chan []parser.BeelzebubServiceConfiguration, 1)
+
+	configs := []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: "127.0.0.1:8080"},
 	}
-	b.traceStrategy = func(event tracer.Event) {}
-	b.reloadMu.Lock()
-	b.reloadCh = nil
-	b.reloadMu.Unlock()
 
-	require.NoError(t, b.Run())
+	b.handleCloudConfigChange(configs, "")
 
-	b.Close()
+	require.Equal(t, configs, <-b.reloadCh)
 }
 
-func TestBuilderCloud_CallbackBufferFull(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":"1","config":"protocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"test\"","tokenId":"token"}]`))
-	}))
-	defer ts.Close()
-
+func TestBuilderHandleCloudConfigChange_ReloadChNil(t *testing.T) {
 	b := NewBuilder()
-	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{
-		Core: struct {
-			Logging        parser.Logging        `yaml:"logging"`
-			Tracings       parser.Tracings       `yaml:"tracings"`
-			Prometheus     parser.Prometheus     `yaml:"prometheus"`
-			BeelzebubCloud parser.BeelzebubCloud `yaml:"beelzebub-cloud"`
-		}{
-			BeelzebubCloud: parser.BeelzebubCloud{
-				Enabled:                true,
-				URI:                    ts.URL,
-				AuthToken:              "test-token",
-				PollingIntervalSeconds: 9999,
-			},
-		},
-	}
-	b.traceStrategy = func(event tracer.Event) {}
 
-	require.NoError(t, b.Run())
-	require.NotNil(t, b.reloadCh)
+	require.NotPanics(t, func() {
+		b.handleCloudConfigChange(nil, "")
+	})
+}
 
-	b.reloadCh <- []parser.BeelzebubServiceConfiguration{
+func TestBuilderHandleCloudConfigChange_BufferFull(t *testing.T) {
+	b := NewBuilder()
+	b.reloadCh = make(chan []parser.BeelzebubServiceConfiguration, 1)
+
+	existing := []parser.BeelzebubServiceConfiguration{
 		{Protocol: "http", Address: "127.0.0.1:9999"},
 	}
+	b.reloadCh <- existing
 
-	triggerCloudCallback(t, b)
+	require.NotPanics(t, func() {
+		b.handleCloudConfigChange(
+			[]parser.BeelzebubServiceConfiguration{
+				{Protocol: "tcp", Address: "127.0.0.1:10000"},
+			},
+			"",
+		)
+	})
 
-	b.Close()
-}
-
-func triggerCloudCallback(t *testing.T, b *Builder) {
-	t.Helper()
-
-	b.reloadMu.Lock()
-	defer b.reloadMu.Unlock()
-
-	if b.reloadCh == nil {
-		return
-	}
-	select {
-	case b.reloadCh <- []parser.BeelzebubServiceConfiguration{
-		{Protocol: "tcp", Address: "127.0.0.1:10000"},
-	}:
-	default:
-	}
+	require.Equal(t, existing, <-b.reloadCh)
 }

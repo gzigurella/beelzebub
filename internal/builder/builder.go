@@ -222,18 +222,7 @@ func (b *Builder) Run() error {
 		}
 		b.reloadMu.Unlock()
 
-		cloud := plugins.InitBeelzebubCloud(conf.URI, conf.AuthToken, func(newConfigs []parser.BeelzebubServiceConfiguration, hash string) {
-			b.reloadMu.Lock()
-			defer b.reloadMu.Unlock()
-
-			if b.reloadCh == nil {
-				return
-			}
-			select {
-			case b.reloadCh <- newConfigs:
-			default:
-			}
-		}, time.Duration(conf.PollingIntervalSeconds)*time.Second, nil)
+		cloud := plugins.InitBeelzebubCloud(conf.URI, conf.AuthToken, b.handleCloudConfigChange, time.Duration(conf.PollingIntervalSeconds)*time.Second, nil)
 
 		b.beelzebubCloud = cloud
 
@@ -253,6 +242,20 @@ func (b *Builder) Run() error {
 
 	log.Infof("Started %d service(s)", len(b.beelzebubServicesConfiguration))
 	return nil
+}
+
+func (b *Builder) handleCloudConfigChange(newConfigs []parser.BeelzebubServiceConfiguration, _ string) {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+
+	if b.reloadCh == nil {
+		return
+	}
+
+	select {
+	case b.reloadCh <- newConfigs:
+	default:
+	}
 }
 
 func (b *Builder) Reload(newConfigs []parser.BeelzebubServiceConfiguration) error {
