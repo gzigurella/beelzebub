@@ -26,6 +26,12 @@ import (
 
 const RabbitmqQueueName = "event"
 
+var (
+	amqpDial            = amqp.Dial
+	amqpCloseChannel    = func(ch *amqp.Channel) error { return ch.Close() }
+	amqpCloseConnection = func(conn *amqp.Connection) error { return conn.Close() }
+)
+
 type Builder struct {
 	beelzebubServicesConfiguration []parser.BeelzebubServiceConfiguration
 	beelzebubCoreConfigurations    *parser.BeelzebubCoreConfigurations
@@ -76,17 +82,19 @@ func (b *Builder) buildLogger(configurations parser.Logging) error {
 }
 
 func (b *Builder) buildRabbitMQ(rabbitMQURI string) error {
-	rabbitMQConnection, err := amqp.Dial(rabbitMQURI)
+	rabbitMQConnection, err := amqpDial(rabbitMQURI)
 	if err != nil {
 		return err
 	}
 
 	b.rabbitMQChannel, err = rabbitMQConnection.Channel()
 	if err != nil {
+		rabbitMQConnection.Close()
 		return err
 	}
 
 	if _, err = b.rabbitMQChannel.QueueDeclare(RabbitmqQueueName, false, false, false, false, nil); err != nil {
+		rabbitMQConnection.Close()
 		return err
 	}
 
@@ -143,10 +151,10 @@ func (b *Builder) Close() error {
 	}
 
 	if b.rabbitMQConnection != nil {
-		if err := b.rabbitMQChannel.Close(); err != nil {
+		if err := amqpCloseChannel(b.rabbitMQChannel); err != nil {
 			return err
 		}
-		if err := b.rabbitMQConnection.Close(); err != nil {
+		if err := amqpCloseConnection(b.rabbitMQConnection); err != nil {
 			return err
 		}
 		b.rabbitMQChannel = nil
