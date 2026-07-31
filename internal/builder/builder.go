@@ -229,9 +229,6 @@ func (b *Builder) Run() error {
 		if honeypotsConfiguration, _, err := cloud.GetHoneypotsConfigurations(); err != nil {
 			return err
 		} else {
-			if len(honeypotsConfiguration) == 0 {
-				return errors.New("no honeypots configuration found")
-			}
 			b.beelzebubServicesConfiguration = honeypotsConfiguration
 		}
 	}

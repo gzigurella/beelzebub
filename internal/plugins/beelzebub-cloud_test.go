@@ -405,6 +405,36 @@ func TestVerifyConfigurationsChanged_ReturnsHTTPError(t *testing.T) {
 	}
 }
 
+func TestVerifyConfigurationsChanged_DetectsEmptyToNonEmpty(t *testing.T) {
+	client := resty.New()
+	httpmock.ActivateNonDefault(client.GetClient())
+	defer httpmock.DeactivateAndReset()
+
+	callCount := 0
+	httpmock.RegisterResponder("GET", "localhost:8081/honeypots", func(req *http.Request) (*http.Response, error) {
+		callCount++
+		if callCount == 1 {
+			return httpmock.NewJsonResponse(200, []HoneypotConfigResponseDTO{})
+		}
+		return httpmock.NewJsonResponse(200, []HoneypotConfigResponseDTO{{
+			Config: "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2222\"\n",
+		}})
+	})
+
+	changed := make(chan struct{}, 1)
+	cloud := InitBeelzebubCloud("localhost:8081", "test-token", func([]parser.BeelzebubServiceConfiguration, string) {
+		changed <- struct{}{}
+	}, 10*time.Millisecond, client)
+	defer cloud.Stop()
+
+	select {
+	case <-changed:
+		assert.GreaterOrEqual(t, callCount, 2)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for empty-to-non-empty callback")
+	}
+}
+
 func TestVerifyConfigurationsChanged_StopsOnContextAtTopOfLoop(t *testing.T) {
 	client := resty.New()
 	httpmock.ActivateNonDefault(client.GetClient())

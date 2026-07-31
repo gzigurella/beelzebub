@@ -443,7 +443,7 @@ func TestBuilderReload_EndToEnd_WithReloadCh(t *testing.T) {
 	}
 }
 
-func TestBuilderRun_CloudError_EmptyConfig(t *testing.T) {
+func TestBuilderRun_CloudEmptyConfig(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("[]"))
@@ -468,8 +468,7 @@ func TestBuilderRun_CloudError_EmptyConfig(t *testing.T) {
 	b.traceStrategy = func(event tracer.Event) {}
 
 	err := b.Run()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "no honeypots configuration found")
+	require.NoError(t, err)
 
 	b.Close()
 }

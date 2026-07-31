@@ -177,15 +177,20 @@ func (beelzebubCloud *BeelzebubCloud) Stop() {
 }
 
 func (beelzebubCloud *BeelzebubCloud) checkConfigurationsChanged(lastHash string) (configs []parser.BeelzebubServiceConfiguration, newHash string, changed bool, err error) {
+	return beelzebubCloud.checkConfigurationsChangedWithState(lastHash, lastHash != "")
+}
+
+func (beelzebubCloud *BeelzebubCloud) checkConfigurationsChangedWithState(lastHash string, initialized bool) (configs []parser.BeelzebubServiceConfiguration, newHash string, changed bool, err error) {
 	configs, configurationsHash, err := beelzebubCloud.GetHoneypotsConfigurations()
 	if err != nil {
 		return nil, "", false, err
 	}
-	return configs, configurationsHash, lastHash != "" && lastHash != configurationsHash, nil
+	return configs, configurationsHash, initialized && lastHash != configurationsHash, nil
 }
 
 func (beelzebubCloud *BeelzebubCloud) verifyConfigurationsChanged() error {
 	var lastHash = ""
+	initialized := false
 	for {
 		select {
 		case <-beelzebubCloud.ctx.Done():
@@ -193,7 +198,7 @@ func (beelzebubCloud *BeelzebubCloud) verifyConfigurationsChanged() error {
 		default:
 		}
 
-		configs, newHash, changed, err := beelzebubCloud.checkConfigurationsChanged(lastHash)
+		configs, newHash, changed, err := beelzebubCloud.checkConfigurationsChangedWithState(lastHash, initialized)
 		if err != nil {
 			return err
 		}
@@ -204,6 +209,7 @@ func (beelzebubCloud *BeelzebubCloud) verifyConfigurationsChanged() error {
 			}
 		}
 		lastHash = newHash
+		initialized = true
 		select {
 		case <-time.After(beelzebubCloud.PollingInterval):
 		case <-beelzebubCloud.ctx.Done():
