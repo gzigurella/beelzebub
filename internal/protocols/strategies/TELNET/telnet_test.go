@@ -173,8 +173,8 @@ func TestTelnetStrategy_Init_Valid(t *testing.T) {
 	mt := &mockTracer{}
 
 	servConf := parser.BeelzebubServiceConfiguration{
-		Address:     "127.0.0.1:0",
-		Description: "test telnet",
+		Address:       "127.0.0.1:0",
+		Description:   "test telnet",
 		PasswordRegex: ".*",
 	}
 
@@ -528,7 +528,7 @@ func TestHandleTelnetConnection_WriteFailAtLogin(t *testing.T) {
 
 	mt := &mockTracer{}
 	servConf := parser.BeelzebubServiceConfiguration{
-		Description: "test",
+		Description:   "test",
 		PasswordRegex: ".*",
 	}
 	strategy := newTelnetStrategy()

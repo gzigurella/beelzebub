@@ -25,11 +25,27 @@ import (
 type SSHStrategy struct {
 	Sessions    *historystore.HistoryStore
 	servers     map[string]*ssh.Server
+	serverReady map[string]<-chan struct{}
+	serversMu   sync.RWMutex
 	cleanerOnce sync.Once
 }
 
+type readyListener struct {
+	net.Listener
+	ready     chan struct{}
+	readyOnce *sync.Once
+}
+
+func (l *readyListener) Accept() (net.Conn, error) {
+	l.readyOnce.Do(func() { close(l.ready) })
+	return l.Listener.Accept()
+}
+
 func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
-	if oldServer, ok := sshStrategy.servers[servConf.Address]; ok {
+	sshStrategy.serversMu.RLock()
+	oldServer, ok := sshStrategy.servers[servConf.Address]
+	sshStrategy.serversMu.RUnlock()
+	if ok {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		oldServer.Shutdown(ctx)
 		cancel()
@@ -55,13 +71,28 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		},
 	}
 
+	ln, err := net.Listen("tcp", servConf.Address)
+	if err != nil {
+		return err
+	}
+	ready := make(chan struct{}, 1)
+	readyOnce := &sync.Once{}
+	server.Addr = ln.Addr().String()
+
+	sshStrategy.serversMu.Lock()
 	if sshStrategy.servers == nil {
 		sshStrategy.servers = make(map[string]*ssh.Server)
 	}
+	if sshStrategy.serverReady == nil {
+		sshStrategy.serverReady = make(map[string]<-chan struct{})
+	}
 	sshStrategy.servers[servConf.Address] = server
+	sshStrategy.serverReady[servConf.Address] = ready
+	sshStrategy.serversMu.Unlock()
 
 	go func() {
-		err := server.ListenAndServe()
+		defer readyOnce.Do(func() { close(ready) })
+		err := server.Serve(&readyListener{Listener: ln, ready: ready, readyOnce: readyOnce})
 		if err != nil {
 			if errors.Is(err, ssh.ErrServerClosed) {
 				log.Debugf("SSH server on %s stopped: %s", servConf.Address, err.Error())
@@ -246,8 +277,20 @@ func (sshStrategy *SSHStrategy) StopAll() error {
 	}
 	sshStrategy.cleanerOnce = sync.Once{}
 
+	sshStrategy.serversMu.RLock()
+	servers := make(map[string]*ssh.Server, len(sshStrategy.servers))
+	readies := make(map[string]<-chan struct{}, len(sshStrategy.serverReady))
+	for address, server := range sshStrategy.servers {
+		servers[address] = server
+	}
+	for address, ready := range sshStrategy.serverReady {
+		readies[address] = ready
+	}
+	sshStrategy.serversMu.RUnlock()
+
 	var errs []error
-	for _, server := range sshStrategy.servers {
+	for address, server := range servers {
+		waitForSSHServer(readies[address])
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := server.Shutdown(ctx); err != nil {
 			log.Errorf("error shutting down SSH server: %s", err.Error())
@@ -255,7 +298,18 @@ func (sshStrategy *SSHStrategy) StopAll() error {
 		}
 		cancel()
 	}
-	sshStrategy.servers = nil
+	sshStrategy.serversMu.Lock()
+	for address, server := range servers {
+		if current, ok := sshStrategy.servers[address]; ok && current == server {
+			delete(sshStrategy.servers, address)
+			delete(sshStrategy.serverReady, address)
+		}
+	}
+	if len(sshStrategy.servers) == 0 {
+		sshStrategy.servers = nil
+		sshStrategy.serverReady = nil
+	}
+	sshStrategy.serversMu.Unlock()
 	if len(errs) > 0 {
 		return fmt.Errorf("ssh stop errors: %w", errors.Join(errs...))
 	}
@@ -263,18 +317,31 @@ func (sshStrategy *SSHStrategy) StopAll() error {
 }
 
 func (sshStrategy *SSHStrategy) Stop(servConf parser.BeelzebubServiceConfiguration) error {
+	sshStrategy.serversMu.RLock()
 	server, ok := sshStrategy.servers[servConf.Address]
+	ready := sshStrategy.serverReady[servConf.Address]
+	sshStrategy.serversMu.RUnlock()
 	if !ok {
 		return nil
 	}
+	waitForSSHServer(ready)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		log.Errorf("error shutting down SSH server on %s: %s", servConf.Address, err.Error())
 		return err
 	}
+	sshStrategy.serversMu.Lock()
 	delete(sshStrategy.servers, servConf.Address)
+	delete(sshStrategy.serverReady, servConf.Address)
+	sshStrategy.serversMu.Unlock()
 	return nil
+}
+
+func waitForSSHServer(ready <-chan struct{}) {
+	if ready != nil {
+		<-ready
+	}
 }
 
 func buildPrompt(user string, serverName string) string {

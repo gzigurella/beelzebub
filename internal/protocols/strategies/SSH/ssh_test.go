@@ -8,6 +8,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,8 +125,8 @@ func TestSSHStrategy_Init_InvalidAddress(t *testing.T) {
 		PasswordRegex: ".*",
 	}
 
-	// SSH runs the listener asynchronously; Init itself should not return an error.
-	assert.NoError(t, strategy.Init(servConf, mt))
+	// Listener setup is synchronous so invalid addresses are reported by Init.
+	assert.Error(t, strategy.Init(servConf, mt))
 }
 
 func TestSSHStrategy_StopAll(t *testing.T) {
@@ -523,10 +524,12 @@ func TestSSHStrategy_StopAll_ShutdownError(t *testing.T) {
 	server := &ssh.Server{
 		Handler: ssh.Handler(func(s ssh.Session) {}),
 	}
+	ready := make(chan struct{}, 1)
+	readyOnce := &sync.Once{}
 	go func() {
-		server.Serve(failL)
+		server.Serve(&readyListener{Listener: failL, ready: ready, readyOnce: readyOnce})
 	}()
-	time.Sleep(50 * time.Millisecond)
+	<-ready
 
 	strategy := &SSHStrategy{}
 	strategy.servers = map[string]*ssh.Server{"test:0": server}

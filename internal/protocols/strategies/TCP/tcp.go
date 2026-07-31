@@ -21,10 +21,10 @@ import (
 )
 
 type TCPStrategy struct {
-	Sessions     *historystore.HistoryStore
-	listeners    map[string]net.Listener
-	cleanerOnce  sync.Once
-	wg           sync.WaitGroup
+	Sessions    *historystore.HistoryStore
+	listeners   map[string]net.Listener
+	cleanerOnce sync.Once
+	wg          sync.WaitGroup
 }
 
 func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {

@@ -33,10 +33,10 @@ const (
 )
 
 type TelnetStrategy struct {
-	Sessions     *historystore.HistoryStore
-	listeners    map[string]net.Listener
-	cleanerOnce  sync.Once
-	wg           sync.WaitGroup
+	Sessions    *historystore.HistoryStore
+	listeners   map[string]net.Listener
+	cleanerOnce sync.Once
+	wg          sync.WaitGroup
 }
 
 func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {

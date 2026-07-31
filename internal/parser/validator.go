@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,7 +46,7 @@ type ServiceValidator interface {
 }
 
 var (
-	serviceValidators []ServiceValidator
+	serviceValidators   []ServiceValidator
 	serviceValidatorsMu sync.Mutex
 )
 

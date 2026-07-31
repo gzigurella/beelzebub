@@ -104,8 +104,8 @@ func TestMCPStrategy_Init_ToolWithAnnotations(t *testing.T) {
 				Description: "An annotated tool",
 				Handler:     "annotated response",
 				Annotations: &parser.ToolAnnotations{
-					Title:         "My Tool",
-					ReadOnlyHint:  &readOnly,
+					Title:          "My Tool",
+					ReadOnlyHint:   &readOnly,
 					IdempotentHint: &readOnly,
 				},
 				Params: []parser.Param{

@@ -582,10 +582,10 @@ func TestValidateCore(t *testing.T) {
 
 func TestValidateAddressFormat(t *testing.T) {
 	tests := []struct {
-		name      string
-		address   string
-		wantWarn  bool
-		warnMsg   string
+		name     string
+		address  string
+		wantWarn bool
+		warnMsg  string
 	}{
 		{":8080", ":8080", false, ""},
 		{"0.0.0.0:80", "0.0.0.0:80", false, ""},

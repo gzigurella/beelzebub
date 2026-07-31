@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	strategyFactories   map[string]func() ServiceStrategy
-	strategyFactoryMu   sync.RWMutex
+	strategyFactories map[string]func() ServiceStrategy
+	strategyFactoryMu sync.RWMutex
 )
 
 func RegisterStrategy(name string, factory func() ServiceStrategy) {

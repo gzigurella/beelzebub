@@ -461,9 +461,9 @@ func (p *testHTTPPlugin) Metadata() plugin.Metadata {
 
 func (p *testHTTPPlugin) HandleHTTP(r *http.Request) plugin.HTTPResponse {
 	return plugin.HTTPResponse{
-		StatusCode: 201,
-		Body:       "http-plugin-body",
-		Headers:    map[string]string{"X-Custom": "value"},
+		StatusCode:  201,
+		Body:        "http-plugin-body",
+		Headers:     map[string]string{"X-Custom": "value"},
 		ContentType: "text/plain",
 	}
 }
@@ -523,8 +523,8 @@ func TestBuildHTTPResponse_UnknownPlugin(t *testing.T) {
 	servConf := parser.BeelzebubServiceConfiguration{}
 
 	cmd := parser.Command{
-		Plugin:    "nonexistent-plugin",
-		Handler:   "fallback",
+		Plugin:     "nonexistent-plugin",
+		Handler:    "fallback",
 		StatusCode: 200,
 	}
 
