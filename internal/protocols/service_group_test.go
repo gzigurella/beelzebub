@@ -41,6 +41,25 @@ func TestServiceGroup_InitServices_success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestServiceReadyMessage(t *testing.T) {
+	assert.Equal(t,
+		"HTTP :80 ready (Wordpress 6.0, 2 commands)",
+		serviceReadyMessage(parser.BeelzebubServiceConfiguration{
+			Protocol:    "http",
+			Address:     ":80",
+			Description: "Wordpress 6.0",
+			Commands:    []parser.Command{{}, {}},
+		}),
+	)
+	assert.Equal(t,
+		"SSH :2222 ready (0 commands)",
+		serviceReadyMessage(parser.BeelzebubServiceConfiguration{
+			Protocol: "ssh",
+			Address:  ":2222",
+		}),
+	)
+}
+
 func TestServiceGroup_InitServices_unknownProtocol(t *testing.T) {
 	sg := NewServiceGroupWithStrategies(
 		InitProtocolManager(func(tracer.Event) {}),

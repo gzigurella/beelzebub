@@ -38,10 +38,7 @@ func (sg *ServiceGroup) InitServices(configs []parser.BeelzebubServiceConfigurat
 		if err := sg.pm.InitService(cfg, strategy); err != nil {
 			return fmt.Errorf("error during init %s: %w", cfg.Protocol, err)
 		}
-		log.Infof("%s %s ready (%d commands)",
-			strings.ToUpper(cfg.Protocol),
-			cfg.Address,
-			len(cfg.Commands))
+		log.Info(serviceReadyMessage(cfg))
 	}
 	return nil
 }
@@ -86,10 +83,7 @@ func (sg *ServiceGroup) Reload(oldConfigs, newConfigs []parser.BeelzebubServiceC
 			continue
 		}
 		startedServices = append(startedServices, newCfg)
-		log.Infof("%s %s ready (%d commands)",
-			strings.ToUpper(newCfg.Protocol),
-			newCfg.Address,
-			len(newCfg.Commands))
+		log.Info(serviceReadyMessage(newCfg))
 	}
 
 	if len(errs) > 0 {
@@ -162,4 +156,14 @@ func configChanged(oldCfg, newCfg parser.BeelzebubServiceConfiguration) bool {
 		return true
 	}
 	return oldHash != newHash
+}
+
+func serviceReadyMessage(cfg parser.BeelzebubServiceConfiguration) string {
+	message := fmt.Sprintf("%s %s ready", strings.ToUpper(cfg.Protocol), cfg.Address)
+	if cfg.Description != "" {
+		message += fmt.Sprintf(" (%s, %d commands)", cfg.Description, len(cfg.Commands))
+	} else {
+		message += fmt.Sprintf(" (%d commands)", len(cfg.Commands))
+	}
+	return message
 }
