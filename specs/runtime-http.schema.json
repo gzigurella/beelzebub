@@ -7,7 +7,18 @@
     {
       "required": ["commands"],
       "properties": {
-        "commands": { "minItems": 1 },
+        "commands": {
+          "minItems": 1,
+          "items": {
+            "properties": {
+              "methods": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
+                "uniqueItems": true
+              }
+            }
+          }
+        },
         "tools": false
       }
     }
