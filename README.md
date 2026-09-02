@@ -117,7 +117,7 @@ Flags:
 
 ### `beelzebub validate`
 
-Parse and validate all configuration files without starting any services. Useful in CI pipelines.
+Parse and validate all configuration files without starting any services. Useful in CI pipelines. See [Configuration Validation](docs/configuration-validation.md) for the validation architecture and rule reference.
 
 ```bash
 beelzebub validate --conf-core ./configurations/beelzebub.yaml --conf-services ./configurations/services/
@@ -330,6 +330,8 @@ Environment variable overrides are supported for all fields (e.g. `BEELZEBUB_RAB
 
 Each decoy service is defined in a separate YAML file placed in the `services/` directory. The `protocol` field determines the deception engine used. Commands use `regex` for request matching and either a static `handler` or a `plugin` reference for dynamic responses.
 
+When using the **LLMHoneypot** plugin, it is highly recommended to use guardrails to prevent the LLM from being jailbroken or otherwise manipulated in ways that could compromise the honeypot. See the [LLMHoneypot plugin documentation](https://docs.beelzebub.ai/basics/beelzebub-api-v1#llmhoneypot-plugin) for details.
+
 ## Deception Services
 
 ### MCP Deception Service
@@ -407,6 +409,7 @@ address: ":80"
 description: "Wordpress 6.0"
 commands:
   - regex: "^(/index.php|/index.html|/)$"
+    methods: [GET, HEAD]
     handler: |
       <html><header><title>Wordpress 6 test page</title></header>
       <body><h1>Hello from Wordpress</h1></body></html>
@@ -416,6 +419,7 @@ commands:
       - "X-Powered-By: PHP/7.4.29"
     statusCode: 200
   - regex: "^(/wp-login.php|/wp-admin)$"
+    methods: [GET, HEAD, POST]
     handler: |
       <html><body>
         <form method="post">
@@ -434,6 +438,8 @@ commands:
       - "Content-Type: text/html"
     statusCode: 404
 ```
+
+Each command may declare an optional `methods` list. A request returns `405 Method Not Allowed` and an `Allow` header only when one or more command regexes match but none accepts its method; an unrestricted catch-all still handles every method. Omitting `methods` accepts every method. `GET` does not automatically imply `HEAD`; configure each method explicitly according to the emulated stack.
 
 **LLM-powered HTTP service**  add a `fallbackCommand` with `plugin: LLMHoneypot` to generate dynamic responses for any unmatched request.
 

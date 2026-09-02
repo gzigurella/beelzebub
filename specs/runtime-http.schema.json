@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://beelzebub-labs.github.io/specs/runtime-http.schema.json",
+  "title": "Beelzebub HTTP Honeypot Configuration",
+  "allOf": [
+    { "$ref": "runtime-config.schema.json" },
+    {
+      "required": ["commands"],
+      "properties": {
+        "commands": {
+          "minItems": 1,
+          "items": {
+            "properties": {
+              "methods": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
+                "uniqueItems": true
+              }
+            }
+          }
+        },
+        "tools": false
+      }
+    }
+  ]
+}

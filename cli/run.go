@@ -51,6 +51,10 @@ func runBeelzebub(cmd *cobra.Command, _ []string) error {
 		return errors.New("no services configured: provide a services directory, set BEELZEBUB_SERVICES_CONFIG, or enable beelzebub-cloud")
 	}
 
+	if validationErr := validateRuntimeConfiguration(coreConfigurations, beelzebubServicesConfiguration); validationErr != nil {
+		return validationErr
+	}
+
 	fmt.Println(
 		`
 ██████  ███████ ███████ ██      ███████ ███████ ██████  ██    ██ ██████  
@@ -84,4 +88,13 @@ Deception runtime framework, happy hacking!`)
 	fmt.Fprintf(cmd.OutOrStdout(), "\nReceived signal %s, shutting down...\n", sig)
 
 	return nil
+}
+
+func validateRuntimeConfiguration(core *parser.BeelzebubCoreConfigurations, services []parser.BeelzebubServiceConfiguration) error {
+	serviceResult := parser.Validate(services, nil)
+	coreResult := parser.ValidateCore(core, rootConfCore)
+	if serviceResult.TotalErrors == 0 && coreResult.TotalErrors == 0 {
+		return nil
+	}
+	return fmt.Errorf("runtime configuration validation failed: %d service error(s), %d core error(s)", serviceResult.TotalErrors, coreResult.TotalErrors)
 }

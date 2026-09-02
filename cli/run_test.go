@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/pkg/plugin"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -30,6 +31,25 @@ func TestRunBeelzebub_InvalidCoreYaml(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "reading core config:") {
 		t.Errorf("expected error to mention core config reading, got: %v", err)
+	}
+}
+
+func TestValidateRuntimeConfigurationRejectsSchemaErrors(t *testing.T) {
+	core := &parser.BeelzebubCoreConfigurations{}
+	services := []parser.BeelzebubServiceConfiguration{{Filename: "invalid.yaml", Protocol: "unknown", Address: ":1"}}
+	if err := validateRuntimeConfiguration(core, services); err == nil {
+		t.Fatal("expected runtime validation error")
+	}
+}
+
+func TestValidateRuntimeConfigurationAcceptsValidService(t *testing.T) {
+	core := &parser.BeelzebubCoreConfigurations{}
+	services := []parser.BeelzebubServiceConfiguration{{
+		Filename: "valid.yaml", ApiVersion: "v1", Protocol: "http", Address: ":8080",
+		Commands: []parser.Command{{RegexStr: ".*", Handler: "ok"}},
+	}}
+	if err := validateRuntimeConfiguration(core, services); err != nil {
+		t.Fatalf("expected valid runtime configuration, got %v", err)
 	}
 }
 
@@ -115,6 +135,9 @@ func TestRunBeelzebub_Success(t *testing.T) {
 protocol: "http"
 address: "127.0.0.1:0"
 description: "test"
+commands:
+  - regex: ".*"
+    handler: "ok"
 `), 0644)
 
 	rootConfCore = corePath
