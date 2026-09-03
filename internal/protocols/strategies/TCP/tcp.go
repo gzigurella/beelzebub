@@ -27,6 +27,8 @@ type TCPStrategy struct {
 	cleanerOnce sync.Once
 }
 
+var listenTCP = net.Listen
+
 func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	if oldListener, ok := tcpStrategy.listeners[servConf.Address]; ok {
 		oldListener.Close()
@@ -43,7 +45,7 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		go tcpStrategy.Sessions.HistoryCleaner()
 	})
 
-	listen, err := net.Listen("tcp", servConf.Address)
+	listen, err := listenTCP("tcp", servConf.Address)
 	if err != nil {
 		log.Errorf("Error during init TCP Protocol: %s", err.Error())
 		return err

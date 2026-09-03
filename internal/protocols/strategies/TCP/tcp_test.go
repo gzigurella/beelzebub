@@ -2,6 +2,7 @@ package TCP
 
 import (
 	"context"
+	"errors"
 	"net"
 	"regexp"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/historystore"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
+	"github.com/beelzebub-labs/beelzebub/v3/internal/plugins"
+	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 	"github.com/beelzebub-labs/beelzebub/v3/pkg/plugin"
 	"github.com/stretchr/testify/assert"
@@ -24,6 +27,51 @@ func (p *tcpTestCommandPlugin) Metadata() plugin.Metadata {
 
 func (p *tcpTestCommandPlugin) Execute(_ context.Context, req plugin.CommandRequest) (string, error) {
 	return "tcp-plugin-output", nil
+}
+
+type tcpErrorCommandPlugin struct{}
+
+func (p *tcpErrorCommandPlugin) Metadata() plugin.Metadata {
+	return plugin.Metadata{Name: "tcp-error-cmd"}
+}
+
+func (p *tcpErrorCommandPlugin) Execute(context.Context, plugin.CommandRequest) (string, error) {
+	return "", errors.New("tcp plugin failure")
+}
+
+type tcpFailingListener struct {
+	net.Listener
+	err error
+}
+
+type tcpScriptedListener struct {
+	accepted net.Conn
+	step     int
+}
+
+func (l *tcpScriptedListener) Accept() (net.Conn, error) {
+	l.step++
+	switch l.step {
+	case 1:
+		return l.accepted, nil
+	case 2:
+		return nil, errors.New("temporary accept failure")
+	default:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *tcpScriptedListener) Close() error   { return nil }
+func (l *tcpScriptedListener) Addr() net.Addr { return scriptedAddr("tcp-scripted") }
+
+type scriptedAddr string
+
+func (a scriptedAddr) Network() string { return "tcp" }
+func (a scriptedAddr) String() string  { return string(a) }
+
+func (l *tcpFailingListener) Close() error {
+	_ = l.Listener.Close()
+	return l.err
 }
 
 type mockTracer struct {
@@ -280,7 +328,7 @@ func TestTCPStrategy_StopAll_AlreadyClosed(t *testing.T) {
 	assert.Nil(t, strategy.listeners)
 }
 
-func TestTCPStrategy_Stop_CloseError(t *testing.T) {
+func TestTCPStrategy_Stop_CloseErrorFromListener(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.New(t).NoError(err)
 	addr := listener.Addr().String()
@@ -305,6 +353,39 @@ func TestTCPStrategy_Stop_ServerNotFound(t *testing.T) {
 
 	err := strategy.Stop(parser.BeelzebubServiceConfiguration{Address: "test:0"})
 	assert.NoError(t, err)
+}
+
+func TestTCPStrategy_Stop_CloseError(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	strategy := newStrategyWithSessions()
+	strategy.listeners = map[string]net.Listener{"test:0": &tcpFailingListener{Listener: listener, err: errors.New("close failed")}}
+
+	err = strategy.Stop(parser.BeelzebubServiceConfiguration{Address: "test:0"})
+	assert.EqualError(t, err, "close failed")
+}
+
+func TestTCPStrategy_Init_OverwriteAndLazySessions(t *testing.T) {
+	strategy := &TCPStrategy{}
+	config := parser.BeelzebubServiceConfiguration{Address: "127.0.0.1:0", Protocol: "tcp"}
+	require.NoError(t, strategy.Init(config, &mockTracer{}))
+	require.NoError(t, strategy.Init(config, &mockTracer{}))
+	require.NoError(t, strategy.StopAll())
+}
+
+func TestTCPStrategy_Init_AcceptErrorAndAcceptedConnection(t *testing.T) {
+	client, server := net.Pipe()
+	client.Close()
+	oldListen := listenTCP
+	listenTCP = func(string, string) (net.Listener, error) {
+		return &tcpScriptedListener{accepted: server}, nil
+	}
+	t.Cleanup(func() { listenTCP = oldListen })
+
+	strategy := &TCPStrategy{}
+	require.NoError(t, strategy.Init(parser.BeelzebubServiceConfiguration{Address: "scripted"}, &mockTracer{}))
+	time.Sleep(50 * time.Millisecond)
+	require.NoError(t, strategy.StopAll())
 }
 
 func TestHexEscapeNonPrintable(t *testing.T) {
@@ -416,6 +497,63 @@ func TestHandleTCPConnection_UnmatchedCommand(t *testing.T) {
 	assert.True(t, foundEnd, "should have end session event")
 }
 
+func TestHandleTCPConnection_PluginErrorAndExistingHistory(t *testing.T) {
+	plugin.Register(&tcpErrorCommandPlugin{})
+	client, server := net.Pipe()
+	defer client.Close()
+
+	mt := &mockTracer{}
+	rex := regexp.MustCompile("^ping$")
+	servConf := parser.BeelzebubServiceConfiguration{
+		Description:            "test",
+		DeadlineTimeoutSeconds: 5,
+		Commands:               []parser.Command{{Regex: rex, Plugin: "tcp-error-cmd", Handler: "fallback"}},
+	}
+	strategy := newStrategyWithSessions()
+	strategy.Sessions.Append("TCP", plugins.Message{Role: plugins.USER.String(), Content: "old"})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleTCPConnection(server, servConf, mt, strategy)
+	}()
+	_, err := client.Write([]byte("ping\n"))
+	require.NoError(t, err)
+	buf := make([]byte, 64)
+	_, err = client.Read(buf)
+	require.NoError(t, err)
+	client.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for handler")
+	}
+}
+
+func TestHandleTCPConnection_MatchedEmptyOutput(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	servConf := parser.BeelzebubServiceConfiguration{
+		DeadlineTimeoutSeconds: 5,
+		Commands:               []parser.Command{{Regex: regexp.MustCompile("^noop$"), Name: "noop"}},
+	}
+	strategy := newStrategyWithSessions()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleTCPConnection(server, servConf, &mockTracer{}, strategy)
+	}()
+	_, err := client.Write([]byte("noop\n"))
+	require.NoError(t, err)
+	client.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for handler")
+	}
+}
+
 func TestHandleTCPConnection_WriteFailureAfterMatch(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
@@ -488,4 +626,9 @@ func TestHandleTCPConnection_Deadline(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout waiting for deadline")
 	}
+}
+
+func TestTCPStrategy_RegistryFactory(t *testing.T) {
+	group := protocols.NewServiceGroupFromRegistry(func(tracer.Event) {})
+	assert.NotNil(t, group.StrategyForProtocol("tcp"))
 }

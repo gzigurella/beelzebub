@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,15 @@ import (
 
 func setupRabbitMQContainer(t *testing.T) (testcontainers.Container, string) {
 	t.Helper()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			message := strings.ToLower(fmt.Sprint(recovered))
+			if strings.Contains(message, "docker") {
+				t.Skipf("Docker unavailable, skipping RabbitMQ test: %v", recovered)
+			}
+			panic(recovered)
+		}
+	}()
 
 	ctx := context.Background()
 	container, err := rabbitmq.RunContainer(ctx,
@@ -227,7 +237,7 @@ func TestBuilderClose_CloudAndRabbitMQ(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":"1","config":"protocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"test\"","tokenId":"token"}]`))
+		w.Write([]byte(`[{"id":"1","config":"apiVersion: \"v1\"\nprotocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"test\"\ncommands:\n  - regex: \".*\"\n    handler: \"test\"\n    statusCode: 200\n","tokenId":"token"}]`))
 	}))
 	defer ts.Close()
 
@@ -266,7 +276,7 @@ func TestBuilderClose_CloudAndRabbitMQ(t *testing.T) {
 func TestBuilderRun_CloudWithValidConfig(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":"1","config":"protocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"test\"","tokenId":"token"}]`))
+		w.Write([]byte(`[{"id":"1","config":"apiVersion: \"v1\"\nprotocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"test\"\ncommands:\n  - regex: \".*\"\n    handler: \"test\"\n    statusCode: 200\n","tokenId":"token"}]`))
 	}))
 	defer ts.Close()
 
@@ -370,9 +380,9 @@ func TestBuilderCloud_CallbackInvoked(t *testing.T) {
 		atomic.AddInt32(&pollCount, 1)
 		w.WriteHeader(http.StatusOK)
 		if atomic.LoadInt32(&pollCount) == 1 {
-			w.Write([]byte(`[{"id":"1","config":"protocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"initial\"","tokenId":"token"}]`))
+			w.Write([]byte(`[{"id":"1","config":"apiVersion: \"v1\"\nprotocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"initial\"\ncommands:\n  - regex: \".*\"\n    handler: \"test\"\n    statusCode: 200\n","tokenId":"token"}]`))
 		} else {
-			w.Write([]byte(`[{"id":"1","config":"protocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"changed\"","tokenId":"token"}]`))
+			w.Write([]byte(`[{"id":"1","config":"apiVersion: \"v1\"\nprotocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"changed\"\ncommands:\n  - regex: \".*\"\n    handler: \"test\"\n    statusCode: 200\n","tokenId":"token"}]`))
 		}
 	}))
 	defer ts.Close()
@@ -461,7 +471,7 @@ func TestBuilderReload_GoroutineError(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":"1","config":"protocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"test\"","tokenId":"token"}]`))
+		w.Write([]byte(`[{"id":"1","config":"apiVersion: \"v1\"\nprotocol: \"http\"\naddress: \"127.0.0.1:0\"\ndescription: \"test\"\ncommands:\n  - regex: \".*\"\n    handler: \"test\"\n    statusCode: 200\n","tokenId":"token"}]`))
 	}))
 	defer ts.Close()
 

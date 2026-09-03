@@ -1,14 +1,18 @@
 package MCP
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
+	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -93,6 +97,9 @@ func TestMCPStrategy_Init_ToolWithAnnotations(t *testing.T) {
 	strategy := &MCPStrategy{}
 	mt := &mockTracer{}
 	readOnly := true
+	destructive := false
+	idempotent := true
+	openWorld := false
 
 	servConf := parser.BeelzebubServiceConfiguration{
 		Address:     "127.0.0.1:0",
@@ -104,9 +111,11 @@ func TestMCPStrategy_Init_ToolWithAnnotations(t *testing.T) {
 				Description: "An annotated tool",
 				Handler:     "annotated response",
 				Annotations: &parser.ToolAnnotations{
-					Title:          "My Tool",
-					ReadOnlyHint:   &readOnly,
-					IdempotentHint: &readOnly,
+					Title:           "My Tool",
+					ReadOnlyHint:    &readOnly,
+					DestructiveHint: &destructive,
+					IdempotentHint:  &idempotent,
+					OpenWorldHint:   &openWorld,
 				},
 				Params: []parser.Param{
 					{
@@ -120,6 +129,29 @@ func TestMCPStrategy_Init_ToolWithAnnotations(t *testing.T) {
 
 	err := strategy.Init(servConf, mt)
 	assert.NoError(t, err)
+}
+
+func TestMCPStrategy_Stop_Success(t *testing.T) {
+	strategy := &MCPStrategy{}
+	config := parser.BeelzebubServiceConfiguration{Address: "127.0.0.1:0", Protocol: "mcp"}
+	require.NoError(t, strategy.Init(config, &mockTracer{}))
+	require.NoError(t, strategy.Stop(config))
+	assert.Empty(t, strategy.servers)
+}
+
+func TestMCPStrategy_handleDeploy_InvalidRegexAndTrustedProxies(t *testing.T) {
+	strategy := &MCPStrategy{}
+	tr := &mockTracer{}
+	request := func(config string) string {
+		req := mcp.CallToolRequest{}
+		req.Params.Arguments = map[string]interface{}{"config_yaml": config}
+		result, err := strategy.handleDeploy(context.Background(), req, parser.BeelzebubServiceConfiguration{}, tr, "", "")
+		require.NoError(t, err)
+		return result.Content[0].(mcp.TextContent).Text
+	}
+
+	assert.Contains(t, request("protocol: ssh\ncommands:\n  - regex: '[invalid'\n"), "invalid regex")
+	assert.Contains(t, request("protocol: ssh\ntrustedProxies: ['[invalid']\n"), "invalid trustedProxies")
 }
 
 func TestMCPStrategy_StopAll(t *testing.T) {
@@ -353,4 +385,56 @@ func TestMCPStrategy_SetDeployFn(t *testing.T) {
 	fn := func(cfg parser.BeelzebubServiceConfiguration) error { return nil }
 	strategy.SetDeployFn(fn)
 	assert.NotNil(t, strategy.deployFn)
+}
+
+func TestMCPStrategy_Init_InvokesToolHandler(t *testing.T) {
+	strategy := &MCPStrategy{}
+	tr := &mockTracer{}
+	config := parser.BeelzebubServiceConfiguration{
+		Address:     "127.0.0.1:0",
+		Description: "callback test",
+		Protocol:    "mcp",
+		Tools: []parser.Tool{{
+			Name:        "echo",
+			Description: "echoes a response",
+			Handler:     "echo response",
+			Params:      []parser.Param{{Name: "value", Description: "value"}},
+		}},
+	}
+	require.NoError(t, strategy.Init(config, tr))
+	defer strategy.StopAll()
+
+	ts := httptest.NewServer(strategy.servers[config.Address])
+	defer ts.Close()
+	post := func(body string, session string) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewBufferString(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if session != "" {
+			req.Header.Set("Mcp-Session-Id", session)
+		}
+		resp, err := ts.Client().Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	initResp := post(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"`+mcp.LATEST_PROTOCOL_VERSION+`","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`, "")
+	defer initResp.Body.Close()
+	_, _ = io.Copy(io.Discard, initResp.Body)
+	require.NotEmpty(t, initResp.Header.Get("Mcp-Session-Id"))
+
+	callResp := post(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"value":"hello"}}}`, initResp.Header.Get("Mcp-Session-Id"))
+	defer callResp.Body.Close()
+	body, err := io.ReadAll(callResp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, callResp.StatusCode)
+	assert.Contains(t, string(body), "echo response")
+	require.Len(t, tr.events, 1)
+	assert.Equal(t, "New MCP tool invocation", tr.events[0].Msg)
+}
+
+func TestMCPStrategy_RegistryFactory(t *testing.T) {
+	group := protocols.NewServiceGroupFromRegistry(func(tracer.Event) {})
+	assert.NotNil(t, group.StrategyForProtocol("mcp"))
 }

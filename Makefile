@@ -46,6 +46,10 @@ test.unit:
 test.unit.verbose:
 	go test ./... -v -race
 
+.PHONY: coverage
+coverage:
+	bash scripts/coverage.sh
+
 .PHONY: test.dependencies.start
 test.dependencies.start:
 	${DOCKER_COMPOSE} -f ./integration_test/docker-compose.yml up -d

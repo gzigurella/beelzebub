@@ -92,6 +92,25 @@ func TestRunBeelzebub_NoServicesConfigured(t *testing.T) {
 	}
 }
 
+func TestRunBeelzebub_RejectsInvalidRuntimeService(t *testing.T) {
+	tmpDir := t.TempDir()
+	corePath := filepath.Join(tmpDir, "core.yaml")
+	require.NoError(t, os.WriteFile(corePath, []byte("core:\n  beelzebub-cloud:\n    enabled: false\n"), 0o644))
+	servicesDir := filepath.Join(tmpDir, "services")
+	require.NoError(t, os.MkdirAll(servicesDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(servicesDir, "invalid.yaml"), []byte("apiVersion: v1\nprotocol: unknown\naddress: ':1'\n"), 0o644))
+
+	oldCore, oldServices, oldLimit := rootConfCore, rootConfServices, runMemLimitMiB
+	t.Cleanup(func() {
+		rootConfCore, rootConfServices, runMemLimitMiB = oldCore, oldServices, oldLimit
+	})
+	rootConfCore, rootConfServices, runMemLimitMiB = corePath, servicesDir, -1
+
+	err := runBeelzebub(runCmd, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "runtime configuration validation failed")
+}
+
 func TestListPlugins_NoPanic(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(io.Discard)

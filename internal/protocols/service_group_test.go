@@ -72,6 +72,18 @@ func TestServiceGroup_InitServices_unknownProtocol(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestServiceGroup_InitServices_strategyError(t *testing.T) {
+	strategy := &mockStrategy{initErr: errors.New("init failure")}
+	sg := NewServiceGroupWithStrategies(
+		InitProtocolManager(func(tracer.Event) {}, strategy),
+		map[string]ServiceStrategy{"ssh": strategy},
+	)
+
+	err := sg.InitServices([]parser.BeelzebubServiceConfiguration{{Protocol: "ssh", Address: ":22"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error during init ssh")
+}
+
 func TestServiceGroup_Reload_noChanges(t *testing.T) {
 	m := &mockStrategy{}
 	sg := NewServiceGroupWithStrategies(

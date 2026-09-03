@@ -39,6 +39,8 @@ type TelnetStrategy struct {
 	cleanerOnce sync.Once
 }
 
+var listenTCP = net.Listen
+
 func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	if oldListener, ok := telnetStrategy.listeners[servConf.Address]; ok {
 		oldListener.Close()
@@ -55,7 +57,7 @@ func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfi
 		go telnetStrategy.Sessions.HistoryCleaner()
 	})
 
-	listener, err := net.Listen("tcp", servConf.Address)
+	listener, err := listenTCP("tcp", servConf.Address)
 	if err != nil {
 		log.Errorf("error during init TELNET Protocol: %s", err.Error())
 		return err
