@@ -2,6 +2,7 @@ package HTTP
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +22,8 @@ import (
 )
 
 type HTTPStrategy struct {
-	servers map[string]*http.Server
+	servers   map[string]*http.Server
+	listeners map[string]net.Listener
 }
 
 type httpResponse struct {
@@ -36,6 +38,12 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		oldServer.Shutdown(ctx)
 		cancel()
 	}
+	if oldListener, ok := httpStrategy.listeners[servConf.Address]; ok {
+		if err := oldListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Errorf("error closing old HTTP listener on %s: %v", servConf.Address, err)
+		}
+		delete(httpStrategy.listeners, servConf.Address)
+	}
 
 	serverMux := http.NewServeMux()
 
@@ -46,17 +54,34 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		Handler: serverMux,
 	}
 
+	listener, err := net.Listen("tcp", servConf.Address)
+	if err != nil {
+		return fmt.Errorf("error binding HTTP server on %s: %w", servConf.Address, err)
+	}
+
+	var serve func() error
+	if servConf.TLSKeyPath != "" && servConf.TLSCertPath != "" {
+		certificate, err := tls.LoadX509KeyPair(servConf.TLSCertPath, servConf.TLSKeyPath)
+		if err != nil {
+			listener.Close()
+			return fmt.Errorf("error loading HTTP TLS certificate: %w", err)
+		}
+		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{certificate}}
+		serve = func() error { return srv.ServeTLS(listener, "", "") }
+	} else {
+		serve = func() error { return srv.Serve(listener) }
+	}
+
 	if httpStrategy.servers == nil {
 		httpStrategy.servers = make(map[string]*http.Server)
 	}
+	if httpStrategy.listeners == nil {
+		httpStrategy.listeners = make(map[string]net.Listener)
+	}
 	httpStrategy.servers[servConf.Address] = srv
+	httpStrategy.listeners[servConf.Address] = listener
 	go func() {
-		var err error
-		if servConf.TLSKeyPath != "" && servConf.TLSCertPath != "" {
-			err = srv.ListenAndServeTLS(servConf.TLSCertPath, servConf.TLSKeyPath)
-		} else {
-			err = srv.ListenAndServe()
-		}
+		err := serve()
 		if err != nil && err != http.ErrServerClosed {
 			log.Errorf("error during init HTTP Protocol: %v", err)
 			return
@@ -68,15 +93,21 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 
 func (httpStrategy *HTTPStrategy) StopAll() error {
 	var errs []error
-	for _, srv := range httpStrategy.servers {
+	for address, srv := range httpStrategy.servers {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Errorf("error shutting down HTTP server: %s", err.Error())
 			errs = append(errs, err)
 		}
 		cancel()
+		if listener, ok := httpStrategy.listeners[address]; ok {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				errs = append(errs, err)
+			}
+		}
 	}
 	httpStrategy.servers = nil
+	httpStrategy.listeners = nil
 	if len(errs) > 0 {
 		return fmt.Errorf("http stop errors: %w", errors.Join(errs...))
 	}
@@ -88,13 +119,23 @@ func (httpStrategy *HTTPStrategy) Stop(servConf parser.BeelzebubServiceConfigura
 	if !ok {
 		return nil
 	}
+	var errs []error
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Errorf("error shutting down HTTP server on %s: %s", servConf.Address, err.Error())
-		return err
+		errs = append(errs, err)
+	}
+	cancel()
+	if listener, ok := httpStrategy.listeners[servConf.Address]; ok {
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	delete(httpStrategy.servers, servConf.Address)
+	delete(httpStrategy.listeners, servConf.Address)
 	return nil
 }
 

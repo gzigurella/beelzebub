@@ -24,8 +24,9 @@ type remoteAddrCtxKey struct{}
 type DeployFunc func(cfg parser.BeelzebubServiceConfiguration) error
 
 type MCPStrategy struct {
-	servers  map[string]*server.StreamableHTTPServer
-	deployFn DeployFunc
+	servers   map[string]*server.StreamableHTTPServer
+	listeners map[string]net.Listener
+	deployFn  DeployFunc
 }
 
 func (mcpStrategy *MCPStrategy) SetDeployFn(fn DeployFunc) {
@@ -37,6 +38,12 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		oldServer.Shutdown(ctx)
 		cancel()
+	}
+	if oldListener, ok := mcpStrategy.listeners[servConf.Address]; ok {
+		if err := oldListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Errorf("error closing old MCP listener on %s: %v", servConf.Address, err)
+		}
+		delete(mcpStrategy.listeners, servConf.Address)
 	}
 
 	mcpServer := server.NewMCPServer(
@@ -109,20 +116,34 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		})
 	}
 
+	httpSrv := &http.Server{Addr: servConf.Address}
 	httpServer := server.NewStreamableHTTPServer(
 		mcpServer,
+		server.WithStreamableHTTPServer(httpSrv),
 		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			return context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
 		}),
 	)
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", httpServer)
+	httpSrv.Handler = mux
+
+	listener, err := net.Listen("tcp", servConf.Address)
+	if err != nil {
+		return fmt.Errorf("error binding MCP server on %s: %w", servConf.Address, err)
+	}
 
 	if mcpStrategy.servers == nil {
 		mcpStrategy.servers = make(map[string]*server.StreamableHTTPServer)
 	}
+	if mcpStrategy.listeners == nil {
+		mcpStrategy.listeners = make(map[string]net.Listener)
+	}
 	mcpStrategy.servers[servConf.Address] = httpServer
+	mcpStrategy.listeners[servConf.Address] = listener
 
 	go func() {
-		if err := httpServer.Start(servConf.Address); err != nil {
+		if err := httpSrv.Serve(listener); err != nil {
 			if errors.Is(err, http.ErrServerClosed) {
 				log.Debugf("MCP server on %s stopped: %s", servConf.Address, err.Error())
 			} else {
@@ -136,15 +157,21 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 func (mcpStrategy *MCPStrategy) StopAll() error {
 	var errs []error
-	for _, srv := range mcpStrategy.servers {
+	for address, srv := range mcpStrategy.servers {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Errorf("error shutting down MCP server: %s", err.Error())
 			errs = append(errs, err)
 		}
 		cancel()
+		if listener, ok := mcpStrategy.listeners[address]; ok {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				errs = append(errs, err)
+			}
+		}
 	}
 	mcpStrategy.servers = nil
+	mcpStrategy.listeners = nil
 	if len(errs) > 0 {
 		return fmt.Errorf("mcp stop errors: %w", errors.Join(errs...))
 	}
@@ -156,13 +183,23 @@ func (mcpStrategy *MCPStrategy) Stop(servConf parser.BeelzebubServiceConfigurati
 	if !ok {
 		return nil
 	}
+	var errs []error
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Errorf("error shutting down MCP server on %s: %s", servConf.Address, err.Error())
-		return err
+		errs = append(errs, err)
+	}
+	cancel()
+	if listener, ok := mcpStrategy.listeners[servConf.Address]; ok {
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	delete(mcpStrategy.servers, servConf.Address)
+	delete(mcpStrategy.listeners, servConf.Address)
 	return nil
 }
 

@@ -93,6 +93,17 @@ func TestMCPStrategy_Init_ToolWithParams(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestMCPStrategy_Init_BindError(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	strategy := &MCPStrategy{}
+	err = strategy.Init(parser.BeelzebubServiceConfiguration{Address: listener.Addr().String()}, &mockTracer{})
+	assert.Error(t, err)
+	assert.Empty(t, strategy.servers)
+}
+
 func TestMCPStrategy_Init_ToolWithAnnotations(t *testing.T) {
 	strategy := &MCPStrategy{}
 	mt := &mockTracer{}

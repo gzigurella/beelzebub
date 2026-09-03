@@ -143,15 +143,24 @@ func (b *Builder) Close() error {
 		}
 	}
 
-	if b.rabbitMQConnection != nil {
+	var errs []error
+	if b.rabbitMQChannel != nil {
 		if err := amqpCloseChannel(b.rabbitMQChannel); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("error closing RabbitMQ channel: %w", err))
+		} else {
+			b.rabbitMQChannel = nil
 		}
+	}
+	if b.rabbitMQConnection != nil {
 		if err := amqpCloseConnection(b.rabbitMQConnection); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("error closing RabbitMQ connection: %w", err))
+		} else {
+			b.rabbitMQConnection = nil
 		}
-		b.rabbitMQChannel = nil
-		b.rabbitMQConnection = nil
+	}
+	if len(errs) > 0 {
+		b.closing.Store(false)
+		return errors.Join(errs...)
 	}
 	return nil
 }

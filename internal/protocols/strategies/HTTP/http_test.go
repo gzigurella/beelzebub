@@ -260,7 +260,19 @@ func TestHTTPStrategy_Init_WithTLS(t *testing.T) {
 	}
 
 	err := strategy.Init(servConf, mt)
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Empty(t, strategy.servers)
+}
+
+func TestHTTPStrategy_Init_BindError(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	strategy := &HTTPStrategy{}
+	err = strategy.Init(parser.BeelzebubServiceConfiguration{Address: listener.Addr().String()}, &mockTracer{})
+	assert.Error(t, err)
+	assert.Empty(t, strategy.servers)
 }
 
 func TestHTTPStrategy_StopAll(t *testing.T) {
@@ -1224,11 +1236,9 @@ func TestInit_TLS(t *testing.T) {
 	}
 
 	err := strategy.Init(conf, tr)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	if err == nil {
+		t.Fatal("expected TLS certificate loading error")
 	}
-
-	time.Sleep(50 * time.Millisecond)
 }
 
 func TestInit_HandlerFunc(t *testing.T) {

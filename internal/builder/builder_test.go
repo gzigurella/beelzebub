@@ -20,6 +20,7 @@ import (
 	_ "github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/TELNET"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 	"github.com/beelzebub-labs/beelzebub/v3/pkg/plugin"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,6 +79,58 @@ func TestBuilderClose_NilLogFile(t *testing.T) {
 	// Close should succeed with nil log file
 	err := builder.Close()
 	assert.NoError(t, err)
+}
+
+func TestBuilderClose_RabbitMQCleanupCanRetry(t *testing.T) {
+	origCloseChannel := amqpCloseChannel
+	origCloseConnection := amqpCloseConnection
+	t.Cleanup(func() {
+		amqpCloseChannel = origCloseChannel
+		amqpCloseConnection = origCloseConnection
+	})
+
+	channelCalls := 0
+	connectionCalls := 0
+	amqpCloseChannel = func(*amqp.Channel) error {
+		channelCalls++
+		if channelCalls == 1 {
+			return fmt.Errorf("channel cleanup failure")
+		}
+		return nil
+	}
+	amqpCloseConnection = func(*amqp.Connection) error {
+		connectionCalls++
+		return fmt.Errorf("connection cleanup failure")
+	}
+
+	b := &Builder{
+		rabbitMQChannel:    &amqp.Channel{},
+		rabbitMQConnection: &amqp.Connection{},
+	}
+
+	err := b.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "channel cleanup failure")
+	assert.Contains(t, err.Error(), "connection cleanup failure")
+	assert.Equal(t, 1, channelCalls)
+	assert.Equal(t, 1, connectionCalls)
+	assert.NotNil(t, b.rabbitMQChannel)
+	assert.NotNil(t, b.rabbitMQConnection)
+
+	amqpCloseChannel = func(*amqp.Channel) error {
+		channelCalls++
+		return nil
+	}
+	amqpCloseConnection = func(*amqp.Connection) error {
+		connectionCalls++
+		return nil
+	}
+
+	require.NoError(t, b.Close())
+	assert.Equal(t, 2, channelCalls)
+	assert.Equal(t, 2, connectionCalls)
+	assert.Nil(t, b.rabbitMQChannel)
+	assert.Nil(t, b.rabbitMQConnection)
 }
 
 func TestSetTraceStrategy(t *testing.T) {
@@ -370,6 +423,39 @@ func TestBuilderReload_EndToEnd(t *testing.T) {
 	conn2, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port2), 2*time.Second)
 	require.NoError(t, err, "port2 should be open after Reload")
 	conn2.Close()
+
+	require.NoError(t, b.Close())
+}
+
+func TestBuilderReload_BindFailureRollsBack(t *testing.T) {
+	oldListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	oldAddr := oldListener.Addr().String()
+	oldListener.Close()
+
+	occupiedListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer occupiedListener.Close()
+	occupiedAddr := occupiedListener.Addr().String()
+
+	b := NewBuilder()
+	b.beelzebubCoreConfigurations = &parser.BeelzebubCoreConfigurations{}
+	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: oldAddr},
+	}
+	b.traceStrategy = func(event tracer.Event) {}
+
+	require.NoError(t, b.Run())
+
+	err = b.Reload([]parser.BeelzebubServiceConfiguration{
+		{Protocol: "http", Address: occupiedAddr},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reload failed, rolled back")
+
+	conn, err := net.DialTimeout("tcp", oldAddr, time.Second)
+	require.NoError(t, err, "old service should be listening after rollback")
+	conn.Close()
 
 	require.NoError(t, b.Close())
 }

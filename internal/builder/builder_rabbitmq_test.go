@@ -178,11 +178,13 @@ func TestBuilderClose_ChannelCloseError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "channel close simulated error")
 
-	assert.NotNil(t, b.rabbitMQConnection)
+	assert.Nil(t, b.rabbitMQConnection)
 	assert.NotNil(t, b.rabbitMQChannel)
 
-	b.rabbitMQChannel.Close()
-	b.rabbitMQConnection.Close()
+	amqpCloseChannel = origCloseCh
+	require.NoError(t, b.Close())
+	assert.Nil(t, b.rabbitMQConnection)
+	assert.Nil(t, b.rabbitMQChannel)
 }
 
 func TestBuilderClose_ConnectionCloseError(t *testing.T) {
@@ -206,10 +208,12 @@ func TestBuilderClose_ConnectionCloseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "connection close simulated error")
 
 	assert.NotNil(t, b.rabbitMQConnection)
-	assert.NotNil(t, b.rabbitMQChannel)
+	assert.Nil(t, b.rabbitMQChannel)
 
-	b.rabbitMQChannel.Close()
-	b.rabbitMQConnection.Close()
+	amqpCloseConnection = origCloseConn
+	require.NoError(t, b.Close())
+	assert.Nil(t, b.rabbitMQConnection)
+	assert.Nil(t, b.rabbitMQChannel)
 }
 
 func TestBuilderClose_LogFileCloseError(t *testing.T) {
