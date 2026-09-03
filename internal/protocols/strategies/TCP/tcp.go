@@ -23,14 +23,17 @@ import (
 type TCPStrategy struct {
 	Sessions    *historystore.HistoryStore
 	listeners   map[string]net.Listener
+	listenerWgs map[string]*sync.WaitGroup
 	cleanerOnce sync.Once
-	wg          sync.WaitGroup
 }
 
 func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	if oldListener, ok := tcpStrategy.listeners[servConf.Address]; ok {
 		oldListener.Close()
-		tcpStrategy.wg.Wait()
+		if oldWg, ok := tcpStrategy.listenerWgs[servConf.Address]; ok {
+			oldWg.Wait()
+			delete(tcpStrategy.listenerWgs, servConf.Address)
+		}
 	}
 
 	if tcpStrategy.Sessions == nil {
@@ -49,11 +52,16 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	if tcpStrategy.listeners == nil {
 		tcpStrategy.listeners = make(map[string]net.Listener)
 	}
+	if tcpStrategy.listenerWgs == nil {
+		tcpStrategy.listenerWgs = make(map[string]*sync.WaitGroup)
+	}
 	tcpStrategy.listeners[servConf.Address] = listen
 
-	tcpStrategy.wg.Add(1)
+	listenerWg := &sync.WaitGroup{}
+	listenerWg.Add(1)
+	tcpStrategy.listenerWgs[servConf.Address] = listenerWg
 	go func() {
-		defer tcpStrategy.wg.Done()
+		defer listenerWg.Done()
 		for {
 			conn, err := listen.Accept()
 			if err != nil {
@@ -89,8 +97,11 @@ func (tcpStrategy *TCPStrategy) StopAll() error {
 			errs = append(errs, err)
 		}
 	}
+	for _, listenerWg := range tcpStrategy.listenerWgs {
+		listenerWg.Wait()
+	}
 	tcpStrategy.listeners = nil
-	tcpStrategy.wg.Wait()
+	tcpStrategy.listenerWgs = nil
 	if len(errs) > 0 {
 		return fmt.Errorf("tcp stop errors: %w", errors.Join(errs...))
 	}
@@ -105,7 +116,10 @@ func (tcpStrategy *TCPStrategy) Stop(servConf parser.BeelzebubServiceConfigurati
 	if err := listener.Close(); err != nil {
 		return err
 	}
-	tcpStrategy.wg.Wait()
+	if listenerWg, ok := tcpStrategy.listenerWgs[servConf.Address]; ok {
+		listenerWg.Wait()
+		delete(tcpStrategy.listenerWgs, servConf.Address)
+	}
 	delete(tcpStrategy.listeners, servConf.Address)
 	return nil
 }

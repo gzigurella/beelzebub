@@ -35,14 +35,17 @@ const (
 type TelnetStrategy struct {
 	Sessions    *historystore.HistoryStore
 	listeners   map[string]net.Listener
+	listenerWgs map[string]*sync.WaitGroup
 	cleanerOnce sync.Once
-	wg          sync.WaitGroup
 }
 
 func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	if oldListener, ok := telnetStrategy.listeners[servConf.Address]; ok {
 		oldListener.Close()
-		telnetStrategy.wg.Wait()
+		if oldWg, ok := telnetStrategy.listenerWgs[servConf.Address]; ok {
+			oldWg.Wait()
+			delete(telnetStrategy.listenerWgs, servConf.Address)
+		}
 	}
 
 	if telnetStrategy.Sessions == nil {
@@ -61,11 +64,16 @@ func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfi
 	if telnetStrategy.listeners == nil {
 		telnetStrategy.listeners = make(map[string]net.Listener)
 	}
+	if telnetStrategy.listenerWgs == nil {
+		telnetStrategy.listenerWgs = make(map[string]*sync.WaitGroup)
+	}
 	telnetStrategy.listeners[servConf.Address] = listener
 
-	telnetStrategy.wg.Add(1)
+	listenerWg := &sync.WaitGroup{}
+	listenerWg.Add(1)
+	telnetStrategy.listenerWgs[servConf.Address] = listenerWg
 	go func() {
-		defer telnetStrategy.wg.Done()
+		defer listenerWg.Done()
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -104,8 +112,11 @@ func (telnetStrategy *TelnetStrategy) StopAll() error {
 			errs = append(errs, err)
 		}
 	}
+	for _, listenerWg := range telnetStrategy.listenerWgs {
+		listenerWg.Wait()
+	}
 	telnetStrategy.listeners = nil
-	telnetStrategy.wg.Wait()
+	telnetStrategy.listenerWgs = nil
 	if len(errs) > 0 {
 		return fmt.Errorf("telnet stop errors: %w", errors.Join(errs...))
 	}
@@ -120,7 +131,10 @@ func (telnetStrategy *TelnetStrategy) Stop(servConf parser.BeelzebubServiceConfi
 	if err := listener.Close(); err != nil {
 		return err
 	}
-	telnetStrategy.wg.Wait()
+	if listenerWg, ok := telnetStrategy.listenerWgs[servConf.Address]; ok {
+		listenerWg.Wait()
+		delete(telnetStrategy.listenerWgs, servConf.Address)
+	}
 	delete(telnetStrategy.listeners, servConf.Address)
 	return nil
 }

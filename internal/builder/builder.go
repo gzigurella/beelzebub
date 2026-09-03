@@ -47,7 +47,6 @@ type Builder struct {
 	beelzebubCloud   *plugins.BeelzebubCloud
 
 	reloadMu sync.Mutex
-	reloadCh chan []parser.BeelzebubServiceConfiguration
 	closing  atomic.Bool
 }
 
@@ -108,12 +107,6 @@ func (b *Builder) Close() error {
 
 	if !b.closing.CompareAndSwap(false, true) {
 		return nil
-	}
-
-	// Stop the reload consumer goroutine.
-	if b.reloadCh != nil {
-		close(b.reloadCh)
-		b.reloadCh = nil
 	}
 
 	if b.servicesCancel != nil {
@@ -207,21 +200,6 @@ func (b *Builder) Run() error {
 	if b.beelzebubCoreConfigurations.Core.BeelzebubCloud.Enabled {
 		conf := b.beelzebubCoreConfigurations.Core.BeelzebubCloud
 
-		b.reloadMu.Lock()
-		if b.reloadCh == nil {
-			b.reloadCh = make(chan []parser.BeelzebubServiceConfiguration, 1)
-			reloadCh := b.reloadCh
-
-			go func() {
-				for cfg := range reloadCh {
-					if err := b.Reload(cfg); err != nil {
-						log.Errorf("hot-reload failed: %s", err.Error())
-					}
-				}
-			}()
-		}
-		b.reloadMu.Unlock()
-
 		cloud := plugins.InitBeelzebubCloud(conf.URI, conf.AuthToken, b.handleCloudConfigChange, time.Duration(conf.PollingIntervalSeconds)*time.Second, nil)
 
 		b.beelzebubCloud = cloud
@@ -241,18 +219,8 @@ func (b *Builder) Run() error {
 	return nil
 }
 
-func (b *Builder) handleCloudConfigChange(newConfigs []parser.BeelzebubServiceConfiguration, _ string) {
-	b.reloadMu.Lock()
-	defer b.reloadMu.Unlock()
-
-	if b.reloadCh == nil {
-		return
-	}
-
-	select {
-	case b.reloadCh <- newConfigs:
-	default:
-	}
+func (b *Builder) handleCloudConfigChange(newConfigs []parser.BeelzebubServiceConfiguration, _ string) error {
+	return b.Reload(newConfigs)
 }
 
 func (b *Builder) Reload(newConfigs []parser.BeelzebubServiceConfiguration) error {

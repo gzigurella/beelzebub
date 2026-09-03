@@ -233,6 +233,40 @@ func TestTCPStrategy_StopAll_AcceptsReturnsClosed(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
+func TestTCPStrategy_Stop_WaitsOnlyForRequestedListener(t *testing.T) {
+	strategy := newStrategyWithSessions()
+	defer strategy.StopAll()
+
+	addresses := make([]string, 0, 2)
+	for range 2 {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		addresses = append(addresses, listener.Addr().String())
+		require.NoError(t, listener.Close())
+	}
+
+	for _, address := range addresses {
+		require.NoError(t, strategy.Init(parser.BeelzebubServiceConfiguration{
+			Protocol: "tcp",
+			Address:  address,
+		}, &mockTracer{}))
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- strategy.Stop(parser.BeelzebubServiceConfiguration{Address: addresses[0]})
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stopping one TCP listener waited for another listener")
+	}
+
+	assert.Len(t, strategy.listeners, 1)
+}
+
 func TestTCPStrategy_StopAll_AlreadyClosed(t *testing.T) {
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	listener.Close()

@@ -489,59 +489,16 @@ func TestBuilderReload_GoroutineError(t *testing.T) {
 	b.traceStrategy = func(event tracer.Event) {}
 
 	require.NoError(t, b.Run())
-	require.NotNil(t, b.reloadCh)
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	occupiedAddr := l.Addr().String()
 
-	b.reloadCh <- []parser.BeelzebubServiceConfiguration{
+	err = b.handleCloudConfigChange([]parser.BeelzebubServiceConfiguration{
 		{Protocol: "tcp", Address: occupiedAddr},
-	}
-	time.Sleep(200 * time.Millisecond)
+	}, "")
+	require.Error(t, err)
 
 	l.Close()
 	b.Close()
-}
-
-func TestBuilderHandleCloudConfigChange_Enqueues(t *testing.T) {
-	b := NewBuilder()
-	b.reloadCh = make(chan []parser.BeelzebubServiceConfiguration, 1)
-
-	configs := []parser.BeelzebubServiceConfiguration{
-		{Protocol: "http", Address: "127.0.0.1:8080"},
-	}
-
-	b.handleCloudConfigChange(configs, "")
-
-	require.Equal(t, configs, <-b.reloadCh)
-}
-
-func TestBuilderHandleCloudConfigChange_ReloadChNil(t *testing.T) {
-	b := NewBuilder()
-
-	require.NotPanics(t, func() {
-		b.handleCloudConfigChange(nil, "")
-	})
-}
-
-func TestBuilderHandleCloudConfigChange_BufferFull(t *testing.T) {
-	b := NewBuilder()
-	b.reloadCh = make(chan []parser.BeelzebubServiceConfiguration, 1)
-
-	existing := []parser.BeelzebubServiceConfiguration{
-		{Protocol: "http", Address: "127.0.0.1:9999"},
-	}
-	b.reloadCh <- existing
-
-	require.NotPanics(t, func() {
-		b.handleCloudConfigChange(
-			[]parser.BeelzebubServiceConfiguration{
-				{Protocol: "tcp", Address: "127.0.0.1:10000"},
-			},
-			"",
-		)
-	})
-
-	require.Equal(t, existing, <-b.reloadCh)
 }

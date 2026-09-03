@@ -275,6 +275,40 @@ func TestTelnetStrategy_StopAll_AlreadyClosed(t *testing.T) {
 	assert.Nil(t, strategy.listeners)
 }
 
+func TestTelnetStrategy_Stop_WaitsOnlyForRequestedListener(t *testing.T) {
+	strategy := &TelnetStrategy{}
+	defer strategy.StopAll()
+
+	addresses := make([]string, 0, 2)
+	for range 2 {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		addresses = append(addresses, listener.Addr().String())
+		require.NoError(t, listener.Close())
+	}
+
+	for _, address := range addresses {
+		require.NoError(t, strategy.Init(parser.BeelzebubServiceConfiguration{
+			Protocol: "telnet",
+			Address:  address,
+		}, &mockTracer{}))
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- strategy.Stop(parser.BeelzebubServiceConfiguration{Address: addresses[0]})
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stopping one TELNET listener waited for another listener")
+	}
+
+	assert.Len(t, strategy.listeners, 1)
+}
+
 func TestTelnetStrategy_Stop_CloseError(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.New(t).NoError(err)

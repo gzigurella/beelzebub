@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,6 +15,10 @@ import (
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 )
+
+func validSSHConfig(address string) string {
+	return fmt.Sprintf("apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \"%s\"\nserverVersion: \"OpenSSH\"\npasswordRegex: \"^root$\"\ncommands:\n  - regex: \"^.*$\"\n    handler: \"ok\"\n", address)
+}
 
 func TestBuildSendEventFailValidation(t *testing.T) {
 	beelzebubCloud := InitBeelzebubCloud("", "", nil, 0, nil)
@@ -89,7 +94,7 @@ func TestGetHoneypotsConfigurationsWithResults(t *testing.T) {
 			resp, err := httpmock.NewJsonResponse(200, &[]HoneypotConfigResponseDTO{
 				{
 					ID:      "123456",
-					Config:  "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2222\"\ndescription: \"SSH interactive ChatGPT\"\ncommands:\n  - regex: \"^(.+)$\"\n    plugin: \"LLMHoneypot\"\nserverVersion: \"OpenSSH\"\nserverName: \"ubuntu\"\npasswordRegex: \"^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456)$\"\ndeadlineTimeoutSeconds: 60\nplugin:\n  llmModel: \"gpt-4o\"\n  openAISecretKey: \"1234\"\n",
+					Config:  "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2222\"\ndescription: \"SSH interactive ChatGPT\"\ncommands:\n  - regex: \"^(.+)$\"\n    plugin: \"LLMHoneypot\"\nserverVersion: \"OpenSSH\"\nserverName: \"ubuntu\"\npasswordRegex: \"^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456)$\"\ndeadlineTimeoutSeconds: 60\nplugin:\n  llmModel: \"gpt-4o\"\n  llmProvider: \"openai\"\n  openAISecretKey: \"1234\"\n",
 					TokenID: "1234567",
 				},
 			})
@@ -126,12 +131,13 @@ func TestGetHoneypotsConfigurationsWithResults(t *testing.T) {
 			DeadlineTimeoutSeconds: 60,
 			Plugin: parser.Plugin{
 				LLMModel:        "gpt-4o",
+				LLMProvider:     "openai",
 				OpenAISecretKey: "1234",
 			},
 			TrustedProxiesNets: []*net.IPNet{},
 		},
 	}, &result)
-	assert.Equal(t, "f488015ba743c96aca43462b2f798d700af9b3eb7cab401435a0c522da6f5abf", configurationsHash)
+	assert.Equal(t, "a89d24772e4ba7af3fc180934916631ab0827e43a4c29ccec79fc80c34b2d8d3", configurationsHash)
 	assert.Nil(t, err)
 }
 
@@ -242,7 +248,7 @@ func TestCheckConfigurationsChanged_FirstCall(t *testing.T) {
 	defer httpmock.DeactivateAndReset()
 
 	uri := "localhost:8081"
-	config := "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2222\"\ndeadlineTimeoutSeconds: 60\npasswordRegex: \"^root$\"\n"
+	config := validSSHConfig(":2222")
 
 	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/honeypots", uri),
 		func(req *http.Request) (*http.Response, error) {
@@ -270,15 +276,15 @@ func TestCheckConfigurationsChanged_ConfigsChanged(t *testing.T) {
 	httpmock.ActivateNonDefault(client.GetClient())
 	defer httpmock.DeactivateAndReset()
 
-	uri := "localhost:8081"
+	uri := "http://localhost:8081"
 	callCount := 0
 
 	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/honeypots", uri),
 		func(req *http.Request) (*http.Response, error) {
 			callCount++
-			config := "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2222\"\ndeadlineTimeoutSeconds: 60\npasswordRegex: \"^root$\"\n"
+			config := validSSHConfig(":2222")
 			if callCount > 1 {
-				config = "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2223\"\ndeadlineTimeoutSeconds: 60\npasswordRegex: \"^root$\"\n"
+				config = validSSHConfig(":2223")
 			}
 			resp, err := httpmock.NewJsonResponse(200, &[]HoneypotConfigResponseDTO{
 				{ID: "123456", Config: config, TokenID: "1234567"},
@@ -336,9 +342,9 @@ func TestVerifyConfigurationsChanged_StopsOnDone(t *testing.T) {
 	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/honeypots", uri),
 		func(req *http.Request) (*http.Response, error) {
 			callCount++
-			config := "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2222\"\n"
+			config := validSSHConfig(":2222")
 			if callCount > 1 {
-				config = "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2223\"\n"
+				config = validSSHConfig(":2223")
 			}
 			resp, err := httpmock.NewJsonResponse(200, &[]HoneypotConfigResponseDTO{
 				{ID: "123456", Config: config, TokenID: "1234567"},
@@ -352,8 +358,9 @@ func TestVerifyConfigurationsChanged_StopsOnDone(t *testing.T) {
 
 	onChangeCalled := make(chan struct{}, 1)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", func(configs []parser.BeelzebubServiceConfiguration, hash string) {
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", func(configs []parser.BeelzebubServiceConfiguration, hash string) error {
 		onChangeCalled <- struct{}{}
+		return nil
 	}, 50*time.Millisecond, client)
 
 	select {
@@ -374,35 +381,93 @@ func TestVerifyConfigurationsChanged_StopsOnDone(t *testing.T) {
 	httpmock.DeactivateAndReset()
 }
 
-func TestVerifyConfigurationsChanged_ReturnsHTTPError(t *testing.T) {
+func TestVerifyConfigurationsChanged_RetriesHTTPError(t *testing.T) {
 	client := resty.New()
 	httpmock.ActivateNonDefault(client.GetClient())
 	defer httpmock.DeactivateAndReset()
 
-	uri := "localhost:8081"
+	uri := "http://localhost:8081"
+	callCount := 0
+	changed := make(chan struct{}, 1)
 
 	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/honeypots", uri),
 		func(req *http.Request) (*http.Response, error) {
-			return httpmock.NewStringResponse(500, ""), nil
+			callCount++
+			if callCount == 1 {
+				return httpmock.NewStringResponse(500, "temporary failure"), nil
+			}
+			config := validSSHConfig(fmt.Sprintf(":%d", 2220+callCount))
+			return httpmock.NewJsonResponse(200, []HoneypotConfigResponseDTO{{Config: config}})
 		},
 	)
 
-	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", nil, 0, nil)
-	beelzebubCloud.client = client
-	beelzebubCloud.PollingInterval = 50 * time.Millisecond
-
-	done := make(chan error, 1)
-	go func() {
-		done <- beelzebubCloud.verifyConfigurationsChanged()
-	}()
+	beelzebubCloud := InitBeelzebubCloud(uri, "sdjdnklfjndslkjanfk", func([]parser.BeelzebubServiceConfiguration, string) error {
+		changed <- struct{}{}
+		return nil
+	}, 10*time.Millisecond, client)
+	defer beelzebubCloud.Stop()
 
 	select {
-	case err := <-done:
-		assert.NotNil(t, err)
-		assert.Contains(t, err.Error(), "Response code: 500")
+	case <-changed:
+		assert.GreaterOrEqual(t, callCount, 3)
 	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for goroutine to return error")
+		t.Fatal("timeout waiting for retry callback")
 	}
+}
+
+func TestVerifyConfigurationsChanged_RetriesFailedCallback(t *testing.T) {
+	client := resty.New()
+	httpmock.ActivateNonDefault(client.GetClient())
+	defer httpmock.DeactivateAndReset()
+
+	callCount := 0
+	callbackCount := 0
+	callbackDone := make(chan struct{}, 1)
+	httpmock.RegisterResponder("GET", "http://localhost:8081/honeypots", func(req *http.Request) (*http.Response, error) {
+		callCount++
+		address := ":2222"
+		if callCount > 1 {
+			address = ":2223"
+		}
+		return httpmock.NewJsonResponse(200, []HoneypotConfigResponseDTO{{
+			Config: validSSHConfig(address),
+		}})
+	})
+
+	cloud := InitBeelzebubCloud("http://localhost:8081", "test-token", func([]parser.BeelzebubServiceConfiguration, string) error {
+		callbackCount++
+		if callbackCount == 1 {
+			return errors.New("reload failed")
+		}
+		callbackDone <- struct{}{}
+		return nil
+	}, 10*time.Millisecond, client)
+	defer cloud.Stop()
+
+	select {
+	case <-callbackDone:
+		assert.Equal(t, 2, callbackCount)
+		assert.GreaterOrEqual(t, callCount, 3)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for callback retry")
+	}
+}
+
+func TestGetHoneypotsConfigurations_RejectsUnknownProtocol(t *testing.T) {
+	client := resty.New()
+	httpmock.ActivateNonDefault(client.GetClient())
+	defer httpmock.DeactivateAndReset()
+
+	httpmock.RegisterResponder("GET", "http://localhost:8081/honeypots", func(req *http.Request) (*http.Response, error) {
+		return httpmock.NewJsonResponse(200, []HoneypotConfigResponseDTO{{
+			Config: "apiVersion: \"v1\"\nprotocol: \"unknown\"\naddress: \":2222\"\n",
+		}})
+	})
+
+	cloud := InitBeelzebubCloud("http://localhost:8081", "test-token", nil, 0, client)
+	_, _, err := cloud.GetHoneypotsConfigurations()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "validation failed")
 }
 
 func TestVerifyConfigurationsChanged_DetectsEmptyToNonEmpty(t *testing.T) {
@@ -411,19 +476,20 @@ func TestVerifyConfigurationsChanged_DetectsEmptyToNonEmpty(t *testing.T) {
 	defer httpmock.DeactivateAndReset()
 
 	callCount := 0
-	httpmock.RegisterResponder("GET", "localhost:8081/honeypots", func(req *http.Request) (*http.Response, error) {
+	httpmock.RegisterResponder("GET", "http://localhost:8081/honeypots", func(req *http.Request) (*http.Response, error) {
 		callCount++
 		if callCount == 1 {
 			return httpmock.NewJsonResponse(200, []HoneypotConfigResponseDTO{})
 		}
 		return httpmock.NewJsonResponse(200, []HoneypotConfigResponseDTO{{
-			Config: "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2222\"\n",
+			Config: validSSHConfig(":2222"),
 		}})
 	})
 
 	changed := make(chan struct{}, 1)
-	cloud := InitBeelzebubCloud("localhost:8081", "test-token", func([]parser.BeelzebubServiceConfiguration, string) {
+	cloud := InitBeelzebubCloud("http://localhost:8081", "test-token", func([]parser.BeelzebubServiceConfiguration, string) error {
 		changed <- struct{}{}
+		return nil
 	}, 10*time.Millisecond, client)
 	defer cloud.Stop()
 
@@ -445,7 +511,7 @@ func TestVerifyConfigurationsChanged_StopsOnContextAtTopOfLoop(t *testing.T) {
 	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/honeypots", uri),
 		func(req *http.Request) (*http.Response, error) {
 			resp, err := httpmock.NewJsonResponse(200, &[]HoneypotConfigResponseDTO{
-				{ID: "123456", Config: "apiVersion: \"v1\"\nprotocol: \"ssh\"\naddress: \":2222\"\n", TokenID: "1234567"},
+				{ID: "123456", Config: validSSHConfig(":2222"), TokenID: "1234567"},
 			})
 			if err != nil {
 				return httpmock.NewStringResponse(500, ""), nil

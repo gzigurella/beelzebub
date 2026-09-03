@@ -374,7 +374,7 @@ func TestBuilderReload_EndToEnd(t *testing.T) {
 	require.NoError(t, b.Close())
 }
 
-func TestBuilderReload_EndToEnd_WithReloadCh(t *testing.T) {
+func TestBuilderReload_EndToEnd_CloudCallback(t *testing.T) {
 	l1, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port1 := l1.Addr().(*net.TCPAddr).Port
@@ -391,19 +391,6 @@ func TestBuilderReload_EndToEnd_WithReloadCh(t *testing.T) {
 		{Protocol: "http", Address: fmt.Sprintf("127.0.0.1:%d", port1)},
 	}
 	b.traceStrategy = func(event tracer.Event) {}
-	b.reloadCh = make(chan []parser.BeelzebubServiceConfiguration, 1)
-
-	// Start the reload consumer manually (same as Run() does when cloud is enabled).
-	consumerDone := make(chan struct{})
-	go func() {
-		for cfg := range b.reloadCh {
-			if err := b.Reload(cfg); err != nil {
-				t.Logf("reload from channel failed: %s", err.Error())
-			}
-		}
-		// When Close() closes reloadCh, the loop exits.
-		close(consumerDone)
-	}()
 
 	require.NoError(t, b.Run())
 	time.Sleep(200 * time.Millisecond)
@@ -413,14 +400,10 @@ func TestBuilderReload_EndToEnd_WithReloadCh(t *testing.T) {
 	require.NoError(t, err, "port1 should be open after Run")
 	conn1.Close()
 
-	// Write new configs to reloadCh (simulating cloud config change).
-	// Reload() internally calls Close() which closes reloadCh — the consumer
-	// goroutine above exits. Run() will not recreate reloadCh because cloud
-	// is not enabled, but the reload has already happened.
 	newConfigs := []parser.BeelzebubServiceConfiguration{
 		{Protocol: "http", Address: fmt.Sprintf("127.0.0.1:%d", port2)},
 	}
-	b.reloadCh <- newConfigs
+	require.NoError(t, b.handleCloudConfigChange(newConfigs, ""))
 	time.Sleep(300 * time.Millisecond)
 
 	// Port1 should be closed after reload
@@ -432,15 +415,7 @@ func TestBuilderReload_EndToEnd_WithReloadCh(t *testing.T) {
 	require.NoError(t, err, "port2 should be open after channel reload")
 	conn2.Close()
 
-	// Close already happened inside Reload(), second call is no-op.
 	require.NoError(t, b.Close())
-
-	// Consumer goroutine should have exited when reloadCh was closed by Close()
-	select {
-	case <-consumerDone:
-	case <-time.After(time.Second):
-		t.Fatal("consumer goroutine did not exit after channel closed")
-	}
 }
 
 func TestBuilderRun_CloudEmptyConfig(t *testing.T) {

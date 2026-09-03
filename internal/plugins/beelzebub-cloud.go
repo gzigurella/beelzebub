@@ -15,7 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type OnConfigChanged func(newConfigs []parser.BeelzebubServiceConfiguration, hash string)
+type OnConfigChanged func(newConfigs []parser.BeelzebubServiceConfiguration, hash string) error
 
 type EventDTO struct {
 	DateTime        string
@@ -159,6 +159,17 @@ func (beelzebubCloud *BeelzebubCloud) GetHoneypotsConfigurations() ([]parser.Bee
 		if err := honeypotsConfig.CompileTrustedProxies(); err != nil {
 			return nil, "", fmt.Errorf("unable to load service config from cloud: TrustedProxies %v", err)
 		}
+		if validation := parser.Validate([]parser.BeelzebubServiceConfiguration{honeypotsConfig}, nil); validation.TotalErrors > 0 {
+			var messages []string
+			for _, result := range validation.Results {
+				for _, issue := range result.Issues {
+					if issue.Level == parser.LevelError {
+						messages = append(messages, issue.Message)
+					}
+				}
+			}
+			return nil, "", fmt.Errorf("unable to load service config from cloud: validation failed: %s", strings.Join(messages, "; "))
+		}
 		servicesConfiguration = append(servicesConfiguration, honeypotsConfig)
 
 		if hashCode, err := honeypotsConfig.HashCode(); err != nil {
@@ -200,21 +211,41 @@ func (beelzebubCloud *BeelzebubCloud) verifyConfigurationsChanged() error {
 
 		configs, newHash, changed, err := beelzebubCloud.checkConfigurationsChangedWithState(lastHash, initialized)
 		if err != nil {
-			return err
+			log.Errorf("Error verifying configurations changed: %s", err.Error())
+			if !beelzebubCloud.waitForPollingInterval() {
+				return nil
+			}
+			continue
 		}
 		if changed {
 			log.Debug("Configurations changed.")
 			if beelzebubCloud.onChange != nil {
-				beelzebubCloud.onChange(configs, newHash)
+				if err := beelzebubCloud.onChange(configs, newHash); err != nil {
+					log.Errorf("Error applying cloud configuration: %s", err.Error())
+					if !beelzebubCloud.waitForPollingInterval() {
+						return nil
+					}
+					continue
+				}
 			}
 		}
 		lastHash = newHash
 		initialized = true
-		select {
-		case <-time.After(beelzebubCloud.PollingInterval):
-		case <-beelzebubCloud.ctx.Done():
+		if !beelzebubCloud.waitForPollingInterval() {
 			return nil
 		}
+	}
+}
+
+func (beelzebubCloud *BeelzebubCloud) waitForPollingInterval() bool {
+	timer := time.NewTimer(beelzebubCloud.PollingInterval)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return true
+	case <-beelzebubCloud.ctx.Done():
+		return false
 	}
 }
 
