@@ -1,6 +1,6 @@
 module github.com/beelzebub-labs/beelzebub/v3
 
-go 1.25.9
+go 1.26.0
 
 require (
 	github.com/gliderlabs/ssh v0.3.8
@@ -19,7 +19,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.38.0
 	golang.org/x/crypto v0.54.0
 	golang.org/x/term v0.45.0
-	golang.org/x/time v0.14.0
+	golang.org/x/time v0.16.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -87,6 +87,7 @@ require (
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/tools v0.48.0 // indirect
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
